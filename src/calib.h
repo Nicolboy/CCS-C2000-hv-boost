@@ -8,7 +8,7 @@
 #define CLK_PLLLOCKPRD      10000
 #define CLK_SYSCLKOUT_HZ    60000000UL
 
-// LEDs (LQFP48 PT) : bleue = GPIO12 (broche 47), rouge = GPIO33 (broche 35)
+// LEDs (LQFP48 PT) : bleue = GPIO12 (broche 47), rouge = GPIO33 (broche 36)
 #define LED_ACTIVE_LOW      1
 
 // Valeur de champ AIOMUX1 pour basculer une broche AIOx en mode analogique

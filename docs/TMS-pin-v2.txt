@@ -1,0 +1,194 @@
+TMS320F28027 — LQFP48 (PT) — Brochage
+Reference : SPRS523P, tableau 7.2.1 "Signal Descriptions" (faisant foi)
+
+================================================================
+V0.01 — ETAT ACTUEL, ANNOTE
+================================================================
+
+Pin  Signal actuel      Fonction reelle du silicium     Verdict
+---  -----------------  ------------------------------  ----------------
+01   UART-TX            GPIO29/SCITXDA/SCLA/TZ3         OK
+02   JTAG-TRST          TRST                            OK
+03   RST                XRS                             OK
+04   NC                 ADCINA6/AIO6                    OK
+05   I-shunt1-adc       ADCINA4/COMP2A/AIO4             DOUBLON (cf. 13)
+06   NC                 ADCINA7                         OK
+07   I-HV-adc           ADCINA3                         OK
+08   I-Batt-adc         ADCINA1                         OK
+09   V-HV-adc           ADCINA2/COMP1A/AIO2             A DEPLACER (E1)
+10   V-Batt-adc         ADCINA0/VREFHI                  OK
+11   10uF               VDDA                            + 3.3V (E3)
+12   GND                VSSA/VREFLO                     OK
+13   I-shunt1-adc       ADCINB1                         DOUBLON (cf. 05)
+14   V-inter-adc        ADCINB2/COMP1B/AIO10            A DEPLACER (E1)
+15   I-shunt2-adc       ADCINB3                         DOUBLON (cf. 16)
+16   I-shunt2-adc       ADCINB4/COMP2B/AIO12            DOUBLON (cf. 15)
+17   Temp1              ADCINB6/AIO14                   OK
+18   Temp2              ADCINB7                         OK
+19   NC                 GPIO34/COMP2OUT                 OK
+20   JTAG-TDI           GPIO35 (TDI)                    OK
+21   JTAG-TMS           GPIO36 (TMS)                    OK
+22   JTAG-TDO           GPIO37 (TDO)                    OK
+23   JTAG-CK            GPIO38/XCLKIN (TCK)             OK
+24   NC                 GPIO18                          OK
+25   NC                 GPIO19                          OK
+26   Stage2-En          GPIO17/SPISOMIA/TZ3             OK
+27   Stage1-En          GPIO16/SPISIMOA/TZ2             OK
+28   Stage1-default     GPIO1/EPWM1B/COMP1OUT           OK
+29   Stage1-PWM         GPIO0/EPWM1A                    OK
+30   NC                 TEST                            OK 
+31   Stage2-PWM         GPIO32/SDAA/EPWMSYNCI           ERREUR (E2)
+32   10uF               VDD                             OK
+33   GND                VSS                             OK
+34   GND                VREGENZ                         OK 
+35   3.3V               VDDIO                           + 10uF
+36   RED LED            GPIO33/SCLA/EPWMSYNCO           OK
+37   HV-EN              GPIO2/EPWM2A                    ERREUR (E2)
+38   Stage2-default     GPIO3/EPWM2B/COMP2OUT           OK
+39   NC                 GPIO4/EPWM3A                    OK
+40   NC                 GPIO5/EPWM3B/ECAP1              OK
+41   NC                 GPIO6/EPWM4A                    OK
+42   NC                 GPIO7/EPWM4B/SCIRXDA            OK
+43   10uF               VDD                             OK
+44   GND                VSS                             OK
+45   GND                X1                              OK 
+46   NC                 X2                              OK 
+47   BLUE LED           GPIO12/TZ1/SCITXDA              OK
+48   UART-RX            GPIO28/SCIRXDA/SDAA/TZ2         OK
+
+
+----------------------------------------------------------------
+ERREURS RESTANTES
+----------------------------------------------------------------
+
+[E1] SHUNTS SUR LES MAUVAISES ENTREES COMPARATEUR  --- BLOQUANT ---
+     COMPxA est cablee en dur sur l'entree NON INVERSEUSE (+) du
+     comparateur. COMPxB n'existe que comme alternative au DAC sur
+     l'entree inverseuse (-). Aucun mux ne permet de les echanger.
+     Pour garder un seuil programmable par le DAC interne, les shunts
+     doivent etre sur les entrees A :
+        COMP1A = pin 09  ->  sortie COMP1OUT = pin 28  (Stage1-default)
+        COMP2A = pin 05  ->  sortie COMP2OUT = pin 38  (Stage2-default)
+     V-HV-adc et V-inter-adc migrent vers 14 et 16 (entrees ADC simples).
+
+[E2] STAGE2-PWM ET HV-EN INVERSES  --- BLOQUANT ---
+     31 = GPIO32, ce n'est pas une sortie ePWM  ->  HV-EN
+     37 = GPIO2/EPWM2A, sortie PWM etage 2 (et canal HRPWM)  ->  Stage2-PWM
+
+[E3] ALIMENTATIONS A COMPLETER
+     11 = VDDA  : 3,3 V + 2,2 uF au plus pres de la broche
+     35 = VDDIO : 3,3 V + condensateur de decouplage (actuellement absent)
+     32 et 43 = VDD : 1,2 uF minimum par broche (VREG interne actif)
+
+[E4] DOUBLONS DE SIGNAUX
+     I-shunt1-adc present sur 05 et 13
+     I-shunt2-adc present sur 15 et 16
+     Le fichier melange l'affectation d'origine et une correction partielle.
+
+[E5] TYPO
+     22 : "JTAG-TMO" -> TDO
+
+[E6] PULLDOWN TRST MANQUANT
+     02 = TRST, actif haut, doit rester bas en fonctionnement normal.
+     Resistance de pulldown externe obligatoire, 2,2 kohm recommandee.
+
+
+================================================================
+V0.2 — BROCHAGE CORRIGE
+================================================================
+
+Pin  Signal              Fonction MCU                    Note
+---  ------------------  ------------------------------  ------------------
+01   UART-TX             GPIO29 / SCITXDA                vers ESP32 GPIO6
+02   JTAG-TRST           TRST                            + pulldown 2,2k
+03   RST                 XRS
+04   NC                  ADCINA6 / AIO6
+05   I-shunt2-adc        ADCINA4 / COMP2A / AIO4         protection etage 2
+06   NC                  ADCINA7
+07   I-HV-adc            ADCINA3                         IOUT
+08   I-Batt-adc          ADCINA1                         IIN
+09   I-shunt1-adc        ADCINA2 / COMP1A / AIO2         protection etage 1
+10   V-Batt-adc          ADCINA0 / VREFHI                VIN
+11   3.3V + 2.2uF        VDDA                            alim analogique
+12   GND                 VSSA / VREFLO
+13   NC                  ADCINB1                         libre
+14   V-HV-adc            ADCINB2 / AIO10                 VOUT
+15   NC                  ADCINB3                         libre
+16   V-inter-adc         ADCINB4 / AIO12                 V1
+17   Temp1               ADCINB6 / AIO14                 NTC etage 1
+18   Temp2               ADCINB7                         NTC etage 2
+19   NC                  GPIO34 / COMP2OUT
+20   JTAG-TDI            GPIO35
+21   JTAG-TMS            GPIO36
+22   JTAG-TDO            GPIO37                          etait "TMO"
+23   JTAG-TCK            GPIO38 / XCLKIN
+24   NC                  GPIO18
+25   NC                  GPIO19
+26   Stage2-EN           GPIO17                          vers porte ET IC9
+27   Stage1-EN           GPIO16                          vers porte ET IC8
+28   Stage1-default      GPIO1 / COMP1OUT                vers porte ET IC8
+29   Stage1-PWM          GPIO0 / EPWM1A                  HRPWM possible
+30   NC                  TEST                            LAISSER NON CONNECTE
+31   HV-EN               GPIO32                          etait Stage2-PWM
+32   VDD + 1.2uF         VDD
+33   GND                 VSS
+34   GND                 VREGENZ                         active le VREG 1,8V
+35   3.3V + decouplage   VDDIO                           condo a ajouter
+36   RED LED             GPIO33
+37   Stage2-PWM          GPIO2 / EPWM2A                  etait HV-EN
+38   Stage2-default      GPIO3 / COMP2OUT                vers porte ET IC9
+39   NC                  GPIO4 / EPWM3A
+40   NC                  GPIO5 / EPWM3B
+41   NC                  GPIO6 / EPWM4A
+42   NC                  GPIO7 / EPWM4B
+43   VDD + 1.2uF         VDD
+44   GND                 VSS
+45   GND                 X1                              oscillateur interne
+46   NC                  X2                              oscillateur interne
+47   BLUE LED            GPIO12                          TZ1 non disponible
+48   UART-RX             GPIO28 / SCIRXDA                depuis ESP32 GPIO7
+
+
+----------------------------------------------------------------
+MODIFICATIONS V0.01 -> V0.2
+----------------------------------------------------------------
+
+05          I-shunt1-adc  ->  I-shunt2-adc      (vers COMP2A)
+09          V-HV-adc      ->  I-shunt1-adc      (vers COMP1A)
+13          I-shunt1-adc  ->  NC
+14          V-inter-adc   ->  V-HV-adc
+15          I-shunt2-adc  ->  NC
+16          I-shunt2-adc  ->  V-inter-adc
+31          Stage2-PWM    ->  HV-EN
+35          ajout d'un condensateur de decouplage 10uF
+37          HV-EN         ->  Stage2-PWM
+
+Broches 34, 36, 43, 44 : inchangees, la V0.01 etait correcte.
+
+
+----------------------------------------------------------------
+POINTS MATERIELS HORS BROCHAGE
+----------------------------------------------------------------
+
+1. PULLDOWN SUR LES PORTES ET  --- IMPORTANT ---
+   GPIO1 et GPIO3 (COMPxOUT) sont des broches a fonction PWM : leurs
+   pullups internes ne sont PAS activees au reset, elles flottent.
+   GPIO16/17 ne sont pas des broches PWM : pullups activees -> etat haut.
+   A la mise sous tension, une entree de chaque porte ET flotte et l'autre
+   est a 1 -> sortie indeterminee, le driver peut etre valide avant que le
+   firmware ne demarre.
+   -> Pulldown 10 kohm sur les DEUX entrees de chaque porte ET (IC8, IC9)
+   -> Pulldown 10 kohm sur les lignes PWM vers les drivers
+   Le firmware ne peut rien pour la fenetre pre-boot.
+
+2. Sequencement d'alimentation : alimenter VDD avant ou avec VDDIO
+   (VDD doit atteindre 0,7 V avant VDDIO) pour eviter un glitch sur les
+   sorties au demarrage.
+
+3. Oscillateur interne : X1 (45) a la masse, X2 (46) non connecte.
+   Derive de 3,03 a 4,85 kHz/degC, d'ou le choix de 57600 bauds sur l'UART
+   au lieu de 115200.
+
+4. TEST (30) : imperativement laisse non connecte (reserve TI).
+
+5. Broches 13 et 15 libres (ADCINB1, ADCINB3) pour une mesure future.
