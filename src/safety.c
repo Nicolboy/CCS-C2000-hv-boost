@@ -73,6 +73,30 @@ void safety_init(void)
     PieCtrlRegs.PIEIER2.bit.INTx2 = 1; // EPWM2_TZINT
 }
 
+void safety_arm_emustop_only(void)
+{
+    EALLOW;
+    // TZ6 = EMUSTOP, cable en dur depuis le CPU (TRM SPRUI09A section 3.2.7).
+    // One-shot : le flag latche, il ne se rearme pas seul.
+    EPwm1Regs.TZSEL.bit.OSHT6 = 1;
+    EPwm1Regs.TZCTL.bit.TZA = TZ_FORCE_LO;
+    EPwm1Regs.TZEINT.bit.OST = 1;
+    EPwm1Regs.TBCTL.bit.FREE_SOFT = 0;
+
+    EPwm2Regs.TZSEL.bit.OSHT6 = 1;
+    EPwm2Regs.TZCTL.bit.TZA = TZ_FORCE_LO;
+    EPwm2Regs.TZEINT.bit.OST = 1;
+    EPwm2Regs.TBCTL.bit.FREE_SOFT = 0;
+
+    PieVectTable.EPWM1_TZINT = &epwm1_tzint_isr;
+    PieVectTable.EPWM2_TZINT = &epwm2_tzint_isr;
+    EDIS;
+
+    IER |= M_INT2;
+    PieCtrlRegs.PIEIER2.bit.INTx1 = 1; // EPWM1_TZINT
+    PieCtrlRegs.PIEIER2.bit.INTx2 = 1; // EPWM2_TZINT
+}
+
 safety_faults_t safety_get_fault_flags(void)
 {
     safety_faults_t f;

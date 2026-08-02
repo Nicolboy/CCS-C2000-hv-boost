@@ -26,6 +26,111 @@ void bsp_gpio_analog_init(void)
     EDIS;
 }
 
+void bsp_gpio_control_init(void)
+{
+    EALLOW;
+    // Stage1-EN = GPIO16 (broche 27), Stage2-EN = GPIO17 (broche 26).
+    // GPIO16/17 ne sont pas des broches PWM : leurs pull-ups sont actives au
+    // reset, ce qui presente un 1 sur une entree de chaque porte ET avant que
+    // le firmware ne tourne. On les coupe des l'init (PROMPT §6 etape 3).
+    GpioCtrlRegs.GPAPUD.bit.GPIO16 = 1;
+    GpioCtrlRegs.GPAPUD.bit.GPIO17 = 1;
+    GpioCtrlRegs.GPAMUX2.bit.GPIO16 = 0;
+    GpioCtrlRegs.GPAMUX2.bit.GPIO17 = 0;
+    GpioCtrlRegs.GPADIR.bit.GPIO16 = 1;
+    GpioCtrlRegs.GPADIR.bit.GPIO17 = 1;
+
+    // HV_EN = GPIO32 (broche 31)
+    GpioCtrlRegs.GPBMUX1.bit.GPIO32 = 0;
+    GpioCtrlRegs.GPBDIR.bit.GPIO32 = 1;
+    EDIS;
+
+    // Etat sur avant toute autre configuration.
+    stage_enable_set(STAGE_1, false);
+    stage_enable_set(STAGE_2, false);
+    hv_enable_set(false);
+}
+
+void stage_enable_set(stage_id_t stage, bool enabled)
+{
+    if (stage == STAGE_1)
+    {
+        if (enabled)
+        {
+            GpioDataRegs.GPASET.bit.GPIO16 = 1;
+        }
+        else
+        {
+            GpioDataRegs.GPACLEAR.bit.GPIO16 = 1;
+        }
+    }
+    else
+    {
+        if (enabled)
+        {
+            GpioDataRegs.GPASET.bit.GPIO17 = 1;
+        }
+        else
+        {
+            GpioDataRegs.GPACLEAR.bit.GPIO17 = 1;
+        }
+    }
+}
+
+void hv_enable_set(bool enabled)
+{
+    if (enabled)
+    {
+        GpioDataRegs.GPBSET.bit.GPIO32 = 1;
+    }
+    else
+    {
+        GpioDataRegs.GPBCLEAR.bit.GPIO32 = 1;
+    }
+}
+
+void bsp_gpio_stage_default_override_init(void)
+{
+    EALLOW;
+    // GPIO1 = COMP1OUT (broche 28), GPIO3 = COMP2OUT (broche 38).
+    // Mux 0 = GPIO : on reprend la main sur des broches normalement pilotees
+    // par les comparateurs. Bring-up uniquement, voir bsp_gpio.h.
+    GpioCtrlRegs.GPAMUX1.bit.GPIO1 = 0;
+    GpioCtrlRegs.GPAMUX1.bit.GPIO3 = 0;
+    GpioCtrlRegs.GPADIR.bit.GPIO1 = 1;
+    GpioCtrlRegs.GPADIR.bit.GPIO3 = 1;
+    EDIS;
+
+    stage_default_set(STAGE_1, false);
+    stage_default_set(STAGE_2, false);
+}
+
+void stage_default_set(stage_id_t stage, bool level)
+{
+    if (stage == STAGE_1)
+    {
+        if (level)
+        {
+            GpioDataRegs.GPASET.bit.GPIO1 = 1;
+        }
+        else
+        {
+            GpioDataRegs.GPACLEAR.bit.GPIO1 = 1;
+        }
+    }
+    else
+    {
+        if (level)
+        {
+            GpioDataRegs.GPASET.bit.GPIO3 = 1;
+        }
+        else
+        {
+            GpioDataRegs.GPACLEAR.bit.GPIO3 = 1;
+        }
+    }
+}
+
 void led_set(led_id_t led, bool on)
 {
 #if LED_ACTIVE_LOW

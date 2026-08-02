@@ -4,6 +4,9 @@
 #include "safety.h"
 #include "uart_link.h"
 #include "protocol.h"
+#include "pwm.h"
+#include "adc.h"
+#include "calib.h"
 
 extern uint16_t RamfuncsLoadStart;
 extern uint16_t RamfuncsLoadSize;
@@ -32,17 +35,46 @@ void main(void)
     InitPieVectTable();
 
     bsp_gpio_analog_init();
-    // safety_init() desactive temporairement : bring-up isole sur LED+UART
-    // uniquement (voir §8 du prompt -- sans risque ici, pwm.c n'existe pas
-    // encore, donc aucun PWM ne peut sortir avec ou sans TZ arme).
+    bsp_gpio_control_init();
+
+    // Ordre d'init (PROMPT §7) : GPIO en etat sur -> AIOMUX1 -> horloge ->
+    // securite -> ADC -> UART -> PWM en dernier.
+    //
+    // pwm_init() est appele AVANT safety_init() pour une raison materielle :
+    // il active PCLKCR1.EPWMxENCLK, sans quoi les ecritures de safety_init()
+    // dans les registres ePWM (TZSEL, TZCTL, DCTRIPSEL) seraient perdues.
+    // L'esprit de la regle est respecte : pwm_init() laisse les deux sorties
+    // forcees a l'etat bas (AQCSFRC) et le duty a 0, donc rien ne sort tant
+    // que le Trip Zone n'est pas arme.
+    pwm_init();
+
+    // safety_init() complet volontairement NON appele : le comparateur a
+    // deja ete valide (trip observe en passant une entree de 0 a 3 V), et
+    // avec les entrees shunt flottantes il declencherait aussitot, ce qui
+    // masquerait le test d'EMUSTOP. On arme donc uniquement TZ6.
+    // A REMPLACER par safety_init() avant toute mise sous tension de la
+    // puissance (PROMPT §8).
+    safety_arm_emustop_only();
+
+    // ADC : declenche par ePWM1, donc apres pwm_init().
+    adc_init();
     uart_link_init();
+
+    // ---- BRING-UP : retest PWM + ADC, puissance DECONNECTEE ---------------
+    // A RETIRER avant toute mise sous tension de la carte de conversion.
+    // HV_EN et Stagex-EN restent a 0 (exclus de ce test).
+    pwm_set_duty(STAGE_1, 0.5f);
+    pwm_set_duty(STAGE_2, 0.5f);
+    pwm_enable(STAGE_1, true);
+    pwm_enable(STAGE_2, true);
+    // -----------------------------------------------------------------------
 
     EALLOW;
     PieVectTable.TINT0 = &cpu_timer0_isr;
     EDIS;
 
     InitCpuTimers();
-    ConfigCpuTimer(&CpuTimer0, 60, 300000); // 300 ms -> rythme d'envoi bring-up UART
+    ConfigCpuTimer(&CpuTimer0, 60, 10000); // base 10 ms (voir cpu_timer0_isr)
     StartCpuTimer0(); // ConfigCpuTimer laisse TSS=1 (timer a l'arret) par conception
 
     IER |= M_INT1;
@@ -54,30 +86,44 @@ void main(void)
     for (;;)
     {
         command_state_t cmd;
+        safety_faults_t faults;
 
         if (uart_link_poll(&cmd))
         {
             g_last_cmd = cmd;
         }
 
+        // Test EMUSTOP : LED rouge = defaut latche, bleue = nominal.
+        // Le flag ne se rearme jamais seul (PROMPT §8).
+        faults = safety_get_fault_flags();
+        {
+            bool tripped = faults.stage1_fault || faults.stage2_fault;
+            led_set(LED_RED, tripped);
+            led_set(LED_BLUE, !tripped);
+        }
+
         if (s_send_telemetry)
         {
             telemetry_t t;
 
-            // Bring-up : valeurs figees, seul le lien TX/RX est valide ici.
-            t.freq1_hz = 100000.0f;
-            t.freq2_hz = 100000.0f;
-            t.duty1_pct = 0.0f;
-            t.duty2_pct = 0.0f;
-            t.vin_v = 12.3f;
-            t.iin_a = 0.5f;
-            t.v1_v = 20.0f;
-            t.i1_a = 0.1f;
-            t.t1_c = 25.0f;
-            t.vout_v = 0.0f;
-            t.i2_a = 0.0f;
-            t.t2_c = 25.0f;
-            t.iout_a = 0.0f;
+            // BRING-UP : chaque champ transporte la TENSION BRUTE de la
+            // broche ADC correspondante, en volts (0..3,3) -- et non la
+            // grandeur physique. Permet de verifier les 9 voies d'un coup
+            // sur l'IHM ESP32 apres ressoudure. measure.c fera la vraie
+            // conversion (ponts diviseurs, gain de shunt, NTC) a l'etape 5.
+            t.freq1_hz = (float)PWM_STAGE1_FREQ_HZ;
+            t.freq2_hz = (float)PWM_STAGE2_FREQ_HZ;
+            t.duty1_pct = 50.0f;
+            t.duty2_pct = 50.0f;
+            t.vin_v = adc_get_volts(ADC_CH_VIN);
+            t.iin_a = adc_get_volts(ADC_CH_IIN);
+            t.v1_v = adc_get_volts(ADC_CH_V1);
+            t.i1_a = adc_get_volts(ADC_CH_I1);
+            t.t1_c = adc_get_volts(ADC_CH_T1);
+            t.vout_v = adc_get_volts(ADC_CH_VOUT);
+            t.i2_a = adc_get_volts(ADC_CH_I2);
+            t.t2_c = adc_get_volts(ADC_CH_T2);
+            t.iout_a = adc_get_volts(ADC_CH_IOUT);
 
             uart_link_send_telemetry(&t);
             s_send_telemetry = false;
@@ -89,15 +135,24 @@ void main(void)
     }
 }
 
+// Base de temps 10 ms. Le clignotement des signaux d'etage a ete retire :
+// GPIO1/GPIO3 (Stagex-default) appartiennent maintenant aux comparateurs, et
+// Stagex-EN est fige a 1 pour rendre le declenchement observable sur les
+// sorties des portes ET. HV_EN reste a 0.
+//
+// Les LED n'affichent plus l'etat de l'ADC mais celui des defauts, pilotees
+// depuis la boucle principale.
 interrupt void cpu_timer0_isr(void)
 {
-    static bool blue_on = false;
+    static uint16_t tick = 0;
 
     CpuTimer0.InterruptCount++;
-    s_send_telemetry = true;
+    tick++;
 
-    blue_on = !blue_on;
-    led_set(LED_BLUE, blue_on);
+    if ((tick % 30U) == 0U)
+    {
+        s_send_telemetry = true; // telemetrie toutes les 300 ms
+    }
 
     PieCtrlRegs.PIEACK.all = PIEACK_GROUP1;
 }

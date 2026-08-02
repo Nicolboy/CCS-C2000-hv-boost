@@ -24,6 +24,26 @@
 #define SAFETY_DAC_CODE \
     ((uint16_t)((SAFETY_ISHUNT_THRESHOLD_A * 0.6f) / SAFETY_DAC_VREF_V * 1023.0f + 0.5f))
 
+// ADC : reference interne obligatoire (VREFHI partage avec ADCINA0/VIN),
+// pleine echelle 3,3 V. Conversion brut -> volts : V = raw * 3.3 / 4096.
+#define ADC_VREF_V          3.3f
+
+// Fenetre d'echantillonnage : ACQPS + 1 cycles ADCCLK (30 MHz ici).
+// 25 -> 26 cycles ~ 0,87 us, confortable meme avec une source de quelques
+// kilo-ohms (ponts diviseurs, pull-down de test).
+#define ADC_ACQPS_CYCLES    25
+
+// Seuil du test de bring-up ADC : LED bleue si une voie passe SOUS cette
+// valeur, rouge sinon. 300 mV = 372 LSB en pleine echelle 3,3 V.
+#define ADC_TEST_THRESHOLD_V   0.3f
+
+// Frequences de decoupage par etage (point ouvert §9.1 du PROMPT, tranche au
+// bring-up). TBCLK = SYSCLKOUT = 60 MHz, TBPRD = SYSCLKOUT/Fpwm - 1 :
+//   etage 1 : 200 kHz -> TBPRD = 299
+//   etage 2 : 100 kHz -> TBPRD = 599
+#define PWM_STAGE1_FREQ_HZ  200000UL
+#define PWM_STAGE2_FREQ_HZ  100000UL
+
 // Liaison UART SCI-A (voir docs/ESP32-UART.md) : 57600 8N1.
 // LSPCLK = SYSCLKOUT/4 (LOSPCP laisse a sa valeur par defaut par InitSysCtrl).
 #define UART_BAUD_RATE      57600UL
