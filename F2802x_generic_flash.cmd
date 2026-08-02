@@ -99,11 +99,16 @@ PAGE 0:    /* Program Memory */
 
    RAMM0       : origin = 0x000050, length = 0x0003B0     /* on-chip RAM block M0 */
    OTP         : origin = 0x3D7800, length = 0x000400     /* on-chip OTP */
-   FLASHA      : origin = 0x3F7000, length = 0x000F80     /* on-chip FLASH */
+   /* Les 4 secteurs flash du F28027 (32K mots au total, cf. common/cmd/F28027.cmd
+      de C2000Ware). Le fichier "generic" d'origine ne declarait que le secteur A
+      (~8K), ce qui faisait deborder le link des que le code grossissait. */
+   FLASHD      : origin = 0x3F0000, length = 0x002000     /* on-chip FLASH */
+   FLASHC      : origin = 0x3F2000, length = 0x002000     /* on-chip FLASH */
+   FLASHB      : origin = 0x3F4000, length = 0x002000     /* on-chip FLASH */
+   FLASHA      : origin = 0x3F6000, length = 0x001F80     /* on-chip FLASH */
    CSM_RSVD    : origin = 0x3F7F80, length = 0x000076     /* Part of FLASHA.  Program with all 0x0000 when CSM is in use. */
    BEGIN       : origin = 0x3F7FF6, length = 0x000002     /* Part of FLASHA.  Used for "boot to Flash" bootloader mode. */
    CSM_PWL_P0  : origin = 0x3F7FF8, length = 0x000008     /* Part of FLASHA.  CSM password locations in FLASHA */
-   FLASHB      : origin = 0x3F6000, length = 0x001000     /* on-chip FLASH */
 
 
 
@@ -121,7 +126,7 @@ PAGE 1 :   /* Data Memory */
 
    BOOT_RSVD   : origin = 0x000000, length = 0x000050     /* Part of M0, BOOT rom will use this for stack */
    RAMM1       : origin = 0x000400, length = 0x000400     /* on-chip RAM block M1 */
-   RAML0       : origin = 0x008000, length = 0x000400     /* on-chip RAM block L0 */
+   RAML0       : origin = 0x008000, length = 0x001000     /* on-chip RAM block L0 (4K mots sur F28027) */
 
 }
 
@@ -145,25 +150,29 @@ SECTIONS
                          RUN_START(_RamfuncsRunStart),
                          PAGE = 0
 
-   .cinit              : >  FLASHA | FLASHB,      PAGE = 0
-   .pinit              : >  FLASHA | FLASHB,      PAGE = 0
-   .text               : >> FLASHA | FLASHB,      PAGE = 0
+   .cinit              : >  FLASHA | FLASHB | FLASHC | FLASHD,   PAGE = 0
+   .pinit              : >  FLASHA | FLASHB | FLASHC | FLASHD,   PAGE = 0
+   .text               : >> FLASHA | FLASHB | FLASHC | FLASHD,   PAGE = 0
 
    csmpasswds          : > CSM_PWL_P0,  PAGE = 0
    csm_rsvd            : > CSM_RSVD,    PAGE = 0
 
    /* Allocate uninitalized data sections: */
+   /* .ebss place en RAML0 EN PREMIER (et non RAMM1) : sinon les globales se
+      retrouvent collees juste apres .stack, et un debordement de pile les
+      ecrase silencieusement au lieu de tomber dans du vide. RAMM1 est ainsi
+      reserve a la pile seule. */
    .stack              : >  RAMM1,             PAGE = 1
-   .ebss               : >> RAMM1 | RAML0,     PAGE = 1
-   .esysmem            : >> RAMM1 | RAML0,     PAGE = 1
+   .ebss               : >> RAML0 | RAMM1,     PAGE = 1
+   .esysmem            : >> RAML0 | RAMM1,     PAGE = 1
 
    /* Initalized sections go in Flash */
    /* For SDFlash to program these, they must be allocated to page 0 */
-   .econst             : >> FLASHA | FLASHB,   PAGE = 0
-   .switch             : >> FLASHA | FLASHB,   PAGE = 0
+   .econst             : >> FLASHA | FLASHB | FLASHC | FLASHD,   PAGE = 0
+   .switch             : >> FLASHA | FLASHB | FLASHC | FLASHD,   PAGE = 0
 
    /* Allocate IQ math areas: */
-   IQmath              : >> FLASHA | FLASHB,   PAGE = 0            /* Math Code */
+   IQmath              : >> FLASHA | FLASHB | FLASHC | FLASHD,   PAGE = 0   /* Math Code */
    IQmathTables        : >  IQTABLES,          PAGE = 0, TYPE = NOLOAD
 
    /* Uncomment the section below if calling the IQNexp() or IQexp()

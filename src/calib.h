@@ -9,7 +9,10 @@
 #define CLK_SYSCLKOUT_HZ    60000000UL
 
 // LEDs (LQFP48 PT) : bleue = GPIO12 (broche 47), rouge = GPIO33 (broche 36)
-#define LED_ACTIVE_LOW      1
+// Point ouvert §9 du prompt : polarite a confirmer au premier test.
+// Observation bring-up (carte 2) : GPIO33 haut = LED rouge visuellement allumee
+// -> cablage actif-haut, pas actif-bas comme suppose initialement.
+#define LED_ACTIVE_LOW      0
 
 // Valeur de champ AIOMUX1 pour basculer une broche AIOx en mode analogique
 #define GPIO_ANALOG_MODE    2
@@ -20,5 +23,16 @@
 #define SAFETY_DAC_VREF_V           3.3f
 #define SAFETY_DAC_CODE \
     ((uint16_t)((SAFETY_ISHUNT_THRESHOLD_A * 0.6f) / SAFETY_DAC_VREF_V * 1023.0f + 0.5f))
+
+// Liaison UART SCI-A (voir docs/ESP32-UART.md) : 57600 8N1.
+// LSPCLK = SYSCLKOUT/4 (LOSPCP laisse a sa valeur par defaut par InitSysCtrl).
+#define UART_BAUD_RATE      57600UL
+#define UART_LSPCLK_HZ      (CLK_SYSCLKOUT_HZ / 4UL)
+// BRR = round(LSPCLK / (8 * baud)) - 1 (TRM SPRUI09A, registre SCIHBAUD:SCILBAUD)
+#define UART_SCIBRR \
+    ((uint16_t)(((UART_LSPCLK_HZ + 4UL * UART_BAUD_RATE) / (8UL * UART_BAUD_RATE)) - 1U))
+
+#define UART_RX_RING_SIZE   64U
+#define UART_LINE_MAX       160U   // limite cote ESP32 (g_lineBuf[160])
 
 #endif

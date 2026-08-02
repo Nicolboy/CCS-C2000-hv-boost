@@ -9,3 +9,7 @@ Release/
 # IDE-generated, machine-specific (hardcoded local tool paths)
 .mcp.json
 CLAUDE.md
+
+# Outillage agent (local, non partage)
+.claude/
+.codex/
