@@ -5,7 +5,7 @@
             <storageModule buildSystemId="org.eclipse.cdt.managedbuilder.core.configurationDataProvider" id="com.ti.ccstudio.buildDefinitions.C2000.Debug.1909800144" moduleId="org.eclipse.cdt.core.settings" name="Debug">
                 <macros>
                     <stringMacro name="ORIGINAL_PROJECT_ROOT" type="VALUE_PATH_ANY" value="${COM_TI_C2000WARE_INSTALL_DIR}/device_support/f2802x/examples/structs/timed_led_blink"/>
-                    <stringMacro name="COM_TI_C2000WARE_INSTALL_DIR" type="VALUE_PATH_DIR" value="C:\ti\C2000Ware_26_01_00_00"/>
+                    <stringMacro name="COM_TI_C2000WARE_INSTALL_DIR" type="VALUE_PATH_DIR" value="${COM_TI_C2000WARE_INSTALL_DIR}"/>
                     <stringMacro name="INSTALLROOT_IQMATH" type="VALUE_PATH_DIR" value="${ORIGINAL_PROJECT_ROOT}/../../../../../libraries/math/IQmath/c28"/>
                     <stringMacro name="INSTALLROOT_F2802x" type="VALUE_PATH_DIR" value="${ORIGINAL_PROJECT_ROOT}/../../.."/>
                 </macros>
@@ -40,7 +40,7 @@
                             </option>
                             <option id="com.ti.ccstudio.buildDefinitions.core.OPT_CODEGEN_VERSION.474454367" superClass="com.ti.ccstudio.buildDefinitions.core.OPT_CODEGEN_VERSION" value="25.11.1.LTS" valueType="string"/>
                             <targetPlatform id="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.targetPlatformDebug.960982070" name="Platform" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.targetPlatformDebug"/>
-                            <builder buildPath="${BuildDirectory}" id="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.builderDebug.557038836" name="GNU Make.Debug" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.builderDebug"/>
+                            <builder buildPath="${BuildDirectory}" id="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.builderDebug.557038836" keepEnvironmentInBuildfile="false" name="GNU Make" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.builderDebug"/>
                             <tool id="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.compilerDebug.2141707820" name="C2000 Compiler" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.compilerDebug">
                                 <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.LARGE_MEMORY_MODEL.400788932" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.LARGE_MEMORY_MODEL" value="true" valueType="boolean"/>
                                 <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.UNIFIED_MEMORY.110360032" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.UNIFIED_MEMORY" value="true" valueType="boolean"/>
