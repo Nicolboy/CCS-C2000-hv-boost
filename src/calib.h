@@ -17,12 +17,76 @@
 // Valeur de champ AIOMUX1 pour basculer une broche AIOx en mode analogique
 #define GPIO_ANALOG_MODE    2
 
-// Seuil de protection courant shunt (identique etage 1 et 2)
-// Shunt 0.02 ohm, gain x30 -> Vadc = I * 0.02 * 30 = I * 0.6
+// =====================================================================
+// Constantes de calibration des chaines de mesure.
+// Source : docs/mesure-cartepuissance.md (mesures reelles sur la carte
+// elevateur). Aucune de ces valeurs ne doit apparaitre ailleurs.
+// =====================================================================
+
+// ---- Chaines de tension (doc §1) ------------------------------------
+// Gain = Vreel / Vadc, soit l'inverse du rapport du pont diviseur.
+// VIN et V1 tombent sur les valeurs theoriques ; VOUT s'en ecarte de
+// 1,8 % (tolerance des resistances), sans consequence : la pleine
+// echelle reelle (600 V) reste au-dessus des 400 V vises.
+#define MEAS_VIN_GAIN_V_PER_V    11.11f   // broche 10, coef mesure 0,09
+#define MEAS_V1_GAIN_V_PER_V     31.25f   // broche 16, coef mesure 0,032
+#define MEAS_VOUT_GAIN_V_PER_V   181.82f  // broche 14, coef mesure 0,0055
+
+// ---- Courant d'entree (doc §2) --------------------------------------
+// Un seul point mesure (250 mA -> 0,208 V) : la caracteristique est
+// SUPPOSEE passer par zero, offset non verifie. Un second point reste
+// a faire.
+#define MEAS_IIN_A_PER_V         1.2019f
+
+// ---- Courant de sortie (doc §4) -------------------------------------
+// NON MESURE : valeur theorique de conception (3,0 V @ 50 mA).
+// A remplacer des qu'une mesure reelle sera disponible.
+#define MEAS_IOUT_A_PER_V        0.016667f
+
+// ---- Shunts MOSFET 0,02 ohm (doc §3) --------------------------------
+// PROVISOIRE : mesures faites avec les MCP6001 de banc. Le gain, fixe
+// par le reseau RF/RG, doit rester valable apres passage au TLV9151 ;
+// l'OFFSET en revanche est domine par le Vos de l'ampli et devra etre
+// ENTIEREMENT REMESURE. Les deux voies different d'environ 1 % :
+// garder deux jeux de constantes, ne jamais moyenner.
+#define MEAS_I1_OFFSET_V         0.0473f
+#define MEAS_I1_GAIN_V_PER_A     0.631f
+#define MEAS_I2_OFFSET_V         0.0340f
+#define MEAS_I2_GAIN_V_PER_A     0.637f
+
+// ---- NTC B57451V5103J062 (PROMPT §5) --------------------------------
+// Montage : 3,3 V -- NTC -- R_fixe -- 0 V, mesure au point milieu.
+// La NTC etant du cote 3,3 V, la tension MONTE avec la temperature :
+//     R_ntc = R_fixe * (VREF - Vadc) / Vadc
+// (le PROMPT §5 donne cette relation inversee ; verifie sur ses propres
+// points de repere : 0,75 V a 0 C -> 34,2 kOhm, ce que beta=4000 predit,
+// alors que la forme inversee donnerait 2,94 kOhm, donc du chaud.)
+// R_fixe suppose a 10 kOhm : reste a confirmer sur la carte (doc §6).
+#define MEAS_NTC_R_FIXED_OHM     10000.0f
+#define MEAS_NTC_R25_OHM         10000.0f
+#define MEAS_NTC_BETA_K          4000.0f
+#define MEAS_NTC_T25_K           298.15f
+#define MEAS_KELVIN_OFFSET       273.15f
+
+// ---- Seuil de protection rapide (doc §5) ----------------------------
+// Le seuil est defini en AMPERES ; le code DAC est calcule par macro a
+// partir du gain et de l'offset mesures, jamais ecrit en dur. Ainsi le
+// futur passage au TLV9151 ne touchera que les constantes ci-dessus.
+//
+// Formule TI : V = DACVAL * (VDDA - VSSA) / 1023  -> 1023, pas 4096.
 #define SAFETY_ISHUNT_THRESHOLD_A   3.0f
 #define SAFETY_DAC_VREF_V           3.3f
-#define SAFETY_DAC_CODE \
-    ((uint16_t)((SAFETY_ISHUNT_THRESHOLD_A * 0.6f) / SAFETY_DAC_VREF_V * 1023.0f + 0.5f))
+
+#define SAFETY_DAC_CODE_FROM_V(v_) \
+    ((uint16_t)((v_) / SAFETY_DAC_VREF_V * 1023.0f + 0.5f))
+
+// Seuil ramene a la sortie de l'ampli : Vadc = offset + I * gain.
+#define SAFETY_DAC_CODE_STAGE1                                            \
+    SAFETY_DAC_CODE_FROM_V(MEAS_I1_OFFSET_V                               \
+                           + SAFETY_ISHUNT_THRESHOLD_A * MEAS_I1_GAIN_V_PER_A)
+#define SAFETY_DAC_CODE_STAGE2                                            \
+    SAFETY_DAC_CODE_FROM_V(MEAS_I2_OFFSET_V                               \
+                           + SAFETY_ISHUNT_THRESHOLD_A * MEAS_I2_GAIN_V_PER_A)
 
 // ADC : reference interne obligatoire (VREFHI partage avec ADCINA0/VIN),
 // pleine echelle 3,3 V. Conversion brut -> volts : V = raw * 3.3 / 4096.

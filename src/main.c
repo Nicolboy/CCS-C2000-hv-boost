@@ -6,6 +6,7 @@
 #include "protocol.h"
 #include "pwm.h"
 #include "adc.h"
+#include "measure.h"
 #include "calib.h"
 
 extern uint16_t RamfuncsLoadStart;
@@ -106,24 +107,24 @@ void main(void)
         {
             telemetry_t t;
 
-            // BRING-UP : chaque champ transporte la TENSION BRUTE de la
-            // broche ADC correspondante, en volts (0..3,3) -- et non la
-            // grandeur physique. Permet de verifier les 9 voies d'un coup
-            // sur l'IHM ESP32 apres ressoudure. measure.c fera la vraie
-            // conversion (ponts diviseurs, gain de shunt, NTC) a l'etape 5.
+            // Grandeurs physiques reelles (etape 5) : conversion par
+            // measure.c a partir des coefficients mesures sur la carte
+            // (docs/mesure-cartepuissance.md).
+            // FREQ/DUTY restent les valeurs de consigne du bloc de bring-up
+            // ci-dessus, pas encore une mesure.
             t.freq1_hz = (float)PWM_STAGE1_FREQ_HZ;
             t.freq2_hz = (float)PWM_STAGE2_FREQ_HZ;
             t.duty1_pct = 50.0f;
             t.duty2_pct = 50.0f;
-            t.vin_v = adc_get_volts(ADC_CH_VIN);
-            t.iin_a = adc_get_volts(ADC_CH_IIN);
-            t.v1_v = adc_get_volts(ADC_CH_V1);
-            t.i1_a = adc_get_volts(ADC_CH_I1);
-            t.t1_c = adc_get_volts(ADC_CH_T1);
-            t.vout_v = adc_get_volts(ADC_CH_VOUT);
-            t.i2_a = adc_get_volts(ADC_CH_I2);
-            t.t2_c = adc_get_volts(ADC_CH_T2);
-            t.iout_a = adc_get_volts(ADC_CH_IOUT);
+            t.vin_v = measure_vin(adc_get_raw(ADC_CH_VIN));
+            t.iin_a = measure_iin(adc_get_raw(ADC_CH_IIN));
+            t.v1_v = measure_v1(adc_get_raw(ADC_CH_V1));
+            t.i1_a = measure_i1(adc_get_raw(ADC_CH_I1));
+            t.t1_c = measure_temp(adc_get_raw(ADC_CH_T1));
+            t.vout_v = measure_vout(adc_get_raw(ADC_CH_VOUT));
+            t.i2_a = measure_i2(adc_get_raw(ADC_CH_I2));
+            t.t2_c = measure_temp(adc_get_raw(ADC_CH_T2));
+            t.iout_a = measure_iout(adc_get_raw(ADC_CH_IOUT));
 
             uart_link_send_telemetry(&t);
             s_send_telemetry = false;
