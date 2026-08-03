@@ -74,6 +74,8 @@
 // futur passage au TLV9151 ne touchera que les constantes ci-dessus.
 //
 // Formule TI : V = DACVAL * (VDDA - VSSA) / 1023  -> 1023, pas 4096.
+// Seuil nominal (PROMPT §5). Le declenchement a ete valide au banc a 1,5 A
+// (courant injectable), puis le seuil remis a sa valeur de service.
 #define SAFETY_ISHUNT_THRESHOLD_A   3.0f
 #define SAFETY_DAC_VREF_V           3.3f
 

@@ -47,10 +47,25 @@ static void update_overtemp(void)
     }
 }
 
-// Priorite : surintensite > surtemperature > EMUSTOP > liaison perdue.
-static led_state_t compute_led_state(void)
+// Etat sur : les deux etages inhibes ET la sortie HT coupee.
+//
+// Couper HV_EN est indispensable et n'a rien de redondant : un boost a 0 %
+// de duty ne donne PAS 0 V en sortie, le chemin Vin -> L -> diode -> Cout
+// reste passant en permanence. HV_EN (VOM1271) est le seul organe qui isole
+// reellement la charge (PROMPT §6 etape 6).
+static void enter_safe_state(void)
 {
-    safety_faults_t faults = safety_get_fault_flags();
+    pwm_enable(STAGE_1, false);
+    pwm_enable(STAGE_2, false);
+    stage_enable_set(STAGE_1, false);
+    stage_enable_set(STAGE_2, false);
+    hv_enable_set(false);
+}
+
+// Priorite : surintensite > surtemperature > EMUSTOP > liaison perdue.
+static led_state_t compute_led_state(const safety_faults_t *f)
+{
+    safety_faults_t faults = *f;
 
     if (faults.overcurrent)
     {
@@ -101,13 +116,10 @@ void main(void)
     // que le Trip Zone n'est pas arme.
     pwm_init();
 
-    // safety_init() complet volontairement NON appele : le comparateur a
-    // deja ete valide (trip observe en passant une entree de 0 a 3 V), et
-    // avec les entrees shunt flottantes il declencherait aussitot, ce qui
-    // masquerait le test d'EMUSTOP. On arme donc uniquement TZ6.
-    // A REMPLACER par safety_init() avant toute mise sous tension de la
-    // puissance (PROMPT §8).
-    safety_arm_emustop_only();
+    // Protection complete : comparateurs + Digital Compare + Trip Zone, et
+    // TZ6/EMUSTOP. Les entrees shunt sont maintenant reellement cablees, le
+    // comparateur ne declenchera donc pas spontanement.
+    safety_init();
 
     // ADC : declenche par ePWM1, donc apres pwm_init().
     adc_init();
@@ -139,6 +151,8 @@ void main(void)
     for (;;)
     {
         command_state_t cmd;
+        safety_faults_t faults;
+
         if (uart_link_poll(&cmd))
         {
             g_last_cmd = cmd;
@@ -147,19 +161,32 @@ void main(void)
 
         update_overtemp();
 
-        // Protection thermique : lente par nature, donc logicielle -- aucun
-        // chemin materiel requis, contrairement a la surintensite.
-        // Pas de redemarrage automatique : rien ne reactive le PWM une fois
-        // coupe, meme si la temperature redescend sous l'hysteresis. Il faut
-        // un reset (ou, a l'etape 8, une commande explicite).
-        if (s_overtemp)
+        faults = safety_get_fault_flags();
+
+        // ARRET GLOBAL : n'importe quel defaut, sur n'importe quel etage,
+        // arrete l'ensemble. Sur un boost en cascade, laisser tourner
+        // l'etage 2 alors que l'etage 1 est coupe n'a pas de sens : il
+        // travaillerait sans tension d'entree.
+        //
+        // Les Trip Zones restent independantes en materiel (une surintensite
+        // etage 2 ne coupe que EPWM2A) : cet arret global est la couche
+        // systeme qui vient PAR-DESSUS. Le logiciel peut inhiber en plus,
+        // jamais outrepasser la protection materielle (PROMPT §2).
+        //
+        // Aucun redemarrage automatique : rien ne reactive le PWM ensuite,
+        // meme si la temperature redescend sous l'hysteresis ou si le defaut
+        // disparait. Il faut un reset, ou une commande explicite (etape 8).
+        if (faults.stage1_fault || faults.stage2_fault || s_overtemp)
         {
-            pwm_enable(STAGE_1, false);
-            pwm_enable(STAGE_2, false);
-            hv_enable_set(false);
+            enter_safe_state();
+        }
+        else
+        {
+            stage_enable_set(STAGE_1, true);
+            stage_enable_set(STAGE_2, true);
         }
 
-        status_led_set_state(compute_led_state());
+        status_led_set_state(compute_led_state(&faults));
 
         if (s_send_telemetry)
         {

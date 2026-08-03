@@ -114,9 +114,21 @@ safety_faults_t safety_get_fault_flags(void)
 void safety_clear_faults(void)
 {
     EALLOW;
+    // OST libere la sortie PWM, DCAEVT1 remet a zero la cause (sinon le
+    // prochain trip serait attribue a une surintensite meme s'il vient
+    // d'EMUSTOP), INT autorise a nouveau la generation d'interruptions, et
+    // TZEINT.OST rearme la notification desarmee par l'ISR.
+    EPwm1Regs.TZCLR.bit.DCAEVT1 = 1;
     EPwm1Regs.TZCLR.bit.OST = 1;
+    EPwm1Regs.TZCLR.bit.INT = 1;
+    EPwm1Regs.TZEINT.bit.OST = 1;
+
+    EPwm2Regs.TZCLR.bit.DCAEVT1 = 1;
     EPwm2Regs.TZCLR.bit.OST = 1;
+    EPwm2Regs.TZCLR.bit.INT = 1;
+    EPwm2Regs.TZEINT.bit.OST = 1;
     EDIS;
+
     s_stage1_fault = false;
     s_stage2_fault = false;
     s_overcurrent = false;
@@ -135,6 +147,24 @@ void safety_force_trip_test(void)
 
 // Diagnostic uniquement : la coupure est deja faite en materiel (PROMPT §6
 // etape 2 point 7). On se contente de relever l'origine du trip.
+//
+// Deux subtilites, decouvertes au banc :
+//
+//  1. TZFLG.INT est le drapeau GLOBAL d'interruption Trip Zone. Tant qu'il
+//     n'est pas efface via TZCLR.INT, plus AUCUNE interruption TZ n'est
+//     generee. Sans ce clear, seul le tout premier trip de la session etait
+//     signale au logiciel : les suivants coupaient bien le PWM en materiel,
+//     mais en silence, sans lever de drapeau.
+//
+//  2. Effacer INT alors que la condition de trip persiste (surintensite
+//     toujours presente) regenere l'evenement immediatement -> tempete
+//     d'interruptions qui affamerait la boucle principale. On desarme donc
+//     TZEINT.OST ici : une seule notification par episode de defaut. Le
+//     rearmement est fait par safety_clear_faults(), c'est-a-dire jamais
+//     automatiquement (PROMPT §8).
+//
+// Le drapeau DCAEVT1 n'est volontairement PAS efface ici : il porte la
+// cause du defaut et doit rester lisible jusqu'a l'effacement explicite.
 interrupt void epwm1_tzint_isr(void)
 {
     s_stage1_fault = true;
@@ -147,6 +177,11 @@ interrupt void epwm1_tzint_isr(void)
     {
         s_emustop = true;
     }
+
+    EALLOW;
+    EPwm1Regs.TZEINT.bit.OST = 0;
+    EPwm1Regs.TZCLR.bit.INT = 1;
+    EDIS;
 
     PieCtrlRegs.PIEACK.all = PIEACK_GROUP2;
 }
@@ -163,6 +198,11 @@ interrupt void epwm2_tzint_isr(void)
     {
         s_emustop = true;
     }
+
+    EALLOW;
+    EPwm2Regs.TZEINT.bit.OST = 0;
+    EPwm2Regs.TZCLR.bit.INT = 1;
+    EDIS;
 
     PieCtrlRegs.PIEACK.all = PIEACK_GROUP2;
 }
