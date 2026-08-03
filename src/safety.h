@@ -7,6 +7,13 @@ typedef struct
 {
     bool stage1_fault;
     bool stage2_fault;
+
+    // Origine du trip, relevee dans TZFLG au moment ou l'ISR s'execute.
+    // TZFLG.DCAEVT1 (bit 3) est distinct de TZFLG.OST (bit 2), ce qui permet
+    // de separer une vraie surintensite d'un arret du debugger -- les deux
+    // n'appellent pas du tout la meme reaction.
+    bool overcurrent; // DCAEVT1 : comparateur, surintensite reelle
+    bool emustop;     // OST sans DCAEVT1 : EMUSTOP (ou TZFRC de test)
 } safety_faults_t;
 
 void safety_init(void);

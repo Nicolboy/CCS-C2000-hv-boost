@@ -88,6 +88,20 @@
     SAFETY_DAC_CODE_FROM_V(MEAS_I2_OFFSET_V                               \
                            + SAFETY_ISHUNT_THRESHOLD_A * MEAS_I2_GAIN_V_PER_A)
 
+// ---- Protection thermique (logicielle, PROMPT §6 etape 4) -----------
+// Contrairement a la surintensite, la thermique est lente : le logiciel
+// suffit, aucun chemin materiel n'est requis.
+// PROVISOIRE : seuil a confirmer selon la tenue reelle du MOSFET et
+// l'implantation des NTC sur la carte.
+// L'hysteresis evite que l'etat oscille autour du point de bascule.
+#define SAFETY_OVERTEMP_C        85.0f
+#define SAFETY_OVERTEMP_HYST_C   10.0f
+
+// ---- Timeout de la liaison ESP32 (PROMPT §6 etape 7) ----------------
+// Sans trame $C valide au-dela de ce delai, la liaison est declaree
+// perdue. La securite ne depend jamais de l'ESP32.
+#define UART_LINK_TIMEOUT_MS     2000U
+
 // ADC : reference interne obligatoire (VREFHI partage avec ADCINA0/VIN),
 // pleine echelle 3,3 V. Conversion brut -> volts : V = raw * 3.3 / 4096.
 #define ADC_VREF_V          3.3f

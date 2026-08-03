@@ -5,6 +5,8 @@
 
 static volatile bool s_stage1_fault = false;
 static volatile bool s_stage2_fault = false;
+static volatile bool s_overcurrent = false;
+static volatile bool s_emustop = false;
 
 interrupt void epwm1_tzint_isr(void);
 interrupt void epwm2_tzint_isr(void);
@@ -104,6 +106,8 @@ safety_faults_t safety_get_fault_flags(void)
     safety_faults_t f;
     f.stage1_fault = s_stage1_fault;
     f.stage2_fault = s_stage2_fault;
+    f.overcurrent = s_overcurrent;
+    f.emustop = s_emustop;
     return f;
 }
 
@@ -115,7 +119,10 @@ void safety_clear_faults(void)
     EDIS;
     s_stage1_fault = false;
     s_stage2_fault = false;
-    led_set(LED_RED, false);
+    s_overcurrent = false;
+    s_emustop = false;
+    // Les LED ne sont plus pilotees ici : c'est status_led.c qui detient
+    // l'affichage, a partir de ces drapeaux.
 }
 
 void safety_force_trip_test(void)
@@ -126,16 +133,36 @@ void safety_force_trip_test(void)
     EDIS;
 }
 
+// Diagnostic uniquement : la coupure est deja faite en materiel (PROMPT §6
+// etape 2 point 7). On se contente de relever l'origine du trip.
 interrupt void epwm1_tzint_isr(void)
 {
     s_stage1_fault = true;
-    led_set(LED_RED, true);
+
+    if (EPwm1Regs.TZFLG.bit.DCAEVT1)
+    {
+        s_overcurrent = true;
+    }
+    else
+    {
+        s_emustop = true;
+    }
+
     PieCtrlRegs.PIEACK.all = PIEACK_GROUP2;
 }
 
 interrupt void epwm2_tzint_isr(void)
 {
     s_stage2_fault = true;
-    led_set(LED_RED, true);
+
+    if (EPwm2Regs.TZFLG.bit.DCAEVT1)
+    {
+        s_overcurrent = true;
+    }
+    else
+    {
+        s_emustop = true;
+    }
+
     PieCtrlRegs.PIEACK.all = PIEACK_GROUP2;
 }

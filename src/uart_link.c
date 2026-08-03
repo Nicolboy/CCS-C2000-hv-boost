@@ -1,6 +1,5 @@
 #include <stdint.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include "DSP28x_Project.h"
 #include "uart_link.h"
@@ -260,6 +259,50 @@ static bool parse_command(const char *body, command_state_t *cmd)
     return ht_found && pwm1_found && pwm2_found;
 }
 
+// Decode EXACTEMENT deux chiffres hexadecimaux. Renvoie false si l'un des
+// deux n'en est pas un.
+//
+// Remplace strtol, qui etait doublement piegeux ici :
+//  - s_line n'est jamais terminee par un '\0', donc strtol lisait au-dela
+//    de la trame, dans les residus de la ligne precedente ;
+//  - sur C28x, uint8_t fait 16 bits (pas d'adressage par octet), donc le
+//    cast (uint8_t) ne tronquait pas le resultat. Un "7D" suivi d'un "7D"
+//    residuel donnait 0x7D7D, retenu tel quel, et toute trame etait
+//    rejetee. Sur une architecture a octets le bug serait passe inapercu.
+static bool parse_hex2(const char *s, uint8_t *out)
+{
+    uint16_t value = 0U;
+    uint16_t i;
+
+    for (i = 0U; i < 2U; i++)
+    {
+        char c = s[i];
+        uint16_t digit;
+
+        if ((c >= '0') && (c <= '9'))
+        {
+            digit = (uint16_t)(c - '0');
+        }
+        else if ((c >= 'A') && (c <= 'F'))
+        {
+            digit = (uint16_t)(c - 'A' + 10);
+        }
+        else if ((c >= 'a') && (c <= 'f'))
+        {
+            digit = (uint16_t)(c - 'a' + 10);
+        }
+        else
+        {
+            return false;
+        }
+
+        value = (uint16_t)((value << 4) | digit);
+    }
+
+    *out = (uint8_t)(value & 0xFFU);
+    return true;
+}
+
 // s_line contient une ligne complete (sans le '\n' terminal).
 static bool process_line(command_state_t *cmd)
 {
@@ -292,7 +335,10 @@ static bool process_line(command_state_t *cmd)
     }
 
     cs_calc = checksum_of(&s_line[1], star - 1);
-    cs_recv = (uint8_t)strtol(&s_line[star + 1], NULL, 16);
+    if (!parse_hex2(&s_line[star + 1], &cs_recv))
+    {
+        return false; // checksum malforme -> trame ignoree
+    }
     if (cs_calc != cs_recv)
     {
         return false; // trame corrompue -> ignoree silencieusement

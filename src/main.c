@@ -7,6 +7,7 @@
 #include "pwm.h"
 #include "adc.h"
 #include "measure.h"
+#include "status_led.h"
 #include "calib.h"
 
 extern uint16_t RamfuncsLoadStart;
@@ -15,10 +16,60 @@ extern uint16_t RamfuncsRunStart;
 
 interrupt void cpu_timer0_isr(void);
 
-// Bring-up etape 7 (UART) : dernier CommandState recu, pour inspection au
-// debogueur. Valeurs de telemetrie figees tant que measure.c n'existe pas.
+// Dernier CommandState recu, expose au debogueur.
 static volatile command_state_t g_last_cmd = {false, false, false};
 static volatile bool s_send_telemetry = false;
+
+// Age de la derniere trame $C valide, en ticks de 10 ms. Incremente par
+// l'ISR, remis a zero par la boucle principale a chaque commande valide.
+// Sature pour ne jamais reboucler.
+#define TICK_MS                 10U
+#define LINK_TIMEOUT_TICKS      ((uint16_t)(UART_LINK_TIMEOUT_MS / TICK_MS))
+static volatile uint16_t s_ticks_since_cmd = LINK_TIMEOUT_TICKS;
+
+// Etat de surtemperature, avec hysteresis pour eviter le battement autour
+// du seuil.
+static bool s_overtemp = false;
+
+static void update_overtemp(void)
+{
+    float t1 = measure_temp(adc_get_raw(ADC_CH_T1));
+    float t2 = measure_temp(adc_get_raw(ADC_CH_T2));
+    float tmax = (t1 > t2) ? t1 : t2;
+
+    if (!s_overtemp)
+    {
+        s_overtemp = (tmax >= SAFETY_OVERTEMP_C);
+    }
+    else
+    {
+        s_overtemp = (tmax > (SAFETY_OVERTEMP_C - SAFETY_OVERTEMP_HYST_C));
+    }
+}
+
+// Priorite : surintensite > surtemperature > EMUSTOP > liaison perdue.
+static led_state_t compute_led_state(void)
+{
+    safety_faults_t faults = safety_get_fault_flags();
+
+    if (faults.overcurrent)
+    {
+        return LED_STATE_OVERCURRENT;
+    }
+    if (s_overtemp)
+    {
+        return LED_STATE_OVERTEMP;
+    }
+    if (faults.emustop)
+    {
+        return LED_STATE_EMUSTOP;
+    }
+    if (s_ticks_since_cmd >= LINK_TIMEOUT_TICKS)
+    {
+        return LED_STATE_LINK_LOST;
+    }
+    return LED_STATE_NOMINAL;
+}
 
 void main(void)
 {
@@ -28,6 +79,7 @@ void main(void)
 
     bsp_clock_init();
     bsp_gpio_leds_init();
+    status_led_init(); // bleu fixe des le depart : "je suis parti"
 
     DINT;
     InitPieCtrl();
@@ -87,21 +139,27 @@ void main(void)
     for (;;)
     {
         command_state_t cmd;
-        safety_faults_t faults;
-
         if (uart_link_poll(&cmd))
         {
             g_last_cmd = cmd;
+            s_ticks_since_cmd = 0U;
         }
 
-        // Test EMUSTOP : LED rouge = defaut latche, bleue = nominal.
-        // Le flag ne se rearme jamais seul (PROMPT §8).
-        faults = safety_get_fault_flags();
+        update_overtemp();
+
+        // Protection thermique : lente par nature, donc logicielle -- aucun
+        // chemin materiel requis, contrairement a la surintensite.
+        // Pas de redemarrage automatique : rien ne reactive le PWM une fois
+        // coupe, meme si la temperature redescend sous l'hysteresis. Il faut
+        // un reset (ou, a l'etape 8, une commande explicite).
+        if (s_overtemp)
         {
-            bool tripped = faults.stage1_fault || faults.stage2_fault;
-            led_set(LED_RED, tripped);
-            led_set(LED_BLUE, !tripped);
+            pwm_enable(STAGE_1, false);
+            pwm_enable(STAGE_2, false);
+            hv_enable_set(false);
         }
+
+        status_led_set_state(compute_led_state());
 
         if (s_send_telemetry)
         {
@@ -149,6 +207,13 @@ interrupt void cpu_timer0_isr(void)
 
     CpuTimer0.InterruptCount++;
     tick++;
+
+    status_led_tick();
+
+    if (s_ticks_since_cmd < LINK_TIMEOUT_TICKS)
+    {
+        s_ticks_since_cmd++; // sature au seuil, pas de rebouclage
+    }
 
     if ((tick % 30U) == 0U)
     {
