@@ -138,6 +138,42 @@ void pwm_set_duty(stage_id_t stage, float duty_0_1)
     pwm_apply_duty(stage);
 }
 
+float pwm_get_duty(stage_id_t stage)
+{
+    volatile struct EPWM_REGS *p = pwm_regs(stage);
+    uint16_t period = (uint16_t)(p->TBPRD + 1U);
+
+    if (period == 0U)
+    {
+        return 0.0f;
+    }
+    return (float)p->CMPA.half.CMPA / (float)period;
+}
+
+uint16_t pwm_get_period_counts(stage_id_t stage)
+{
+    return (uint16_t)(pwm_regs(stage)->TBPRD + 1U);
+}
+
+void pwm_set_duty_counts(stage_id_t stage, uint16_t counts)
+{
+    volatile struct EPWM_REGS *p = pwm_regs(stage);
+    uint16_t period = (uint16_t)(p->TBPRD + 1U);
+
+    if (counts > period)
+    {
+        counts = period;
+    }
+
+    p->CMPA.half.CMPA = counts;
+
+    // PAS de mise a jour de la consigne flottante ici : cette fonction est
+    // appelee depuis l'ISR ADC a plusieurs dizaines de kHz, et le F28027
+    // n'a pas d'unite flottante -- une division y coutait plusieurs
+    // centaines de cycles et effondrait la cadence de l'ISR.
+    // pwm_get_duty() relit CMPA, la telemetrie reste donc juste.
+}
+
 void pwm_enable(stage_id_t stage, bool enabled)
 {
     volatile struct EPWM_REGS *p = pwm_regs(stage);

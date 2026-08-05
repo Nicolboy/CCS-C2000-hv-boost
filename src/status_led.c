@@ -50,8 +50,14 @@ void status_led_set_state(led_state_t state)
     }
 }
 
+// Appelee en ISR : aucune multiplication ni division. Le compteur de phase
+// reboucle par COMPARAISON, jamais par modulo -- sur C28x un "%" par une
+// valeur qui n'est pas une puissance de deux est une division logicielle,
+// donc plusieurs dizaines de cycles.
 void status_led_tick(void)
 {
+    uint16_t period;
+    uint16_t on_time;
     bool blue = false;
     bool red = false;
 
@@ -60,25 +66,55 @@ void status_led_tick(void)
         s_startup_hold--;
     }
 
+    // Periode et duree du niveau actif du motif courant.
+    switch (s_state)
+    {
+    case LED_STATE_NOMINAL:
+        period = NOMINAL_PERIOD;
+        on_time = NOMINAL_ON;
+        break;
+
+    case LED_STATE_LINK_LOST:
+        period = LINK_LOST_PERIOD;
+        on_time = LINK_LOST_ON;
+        break;
+
+    case LED_STATE_EMUSTOP:
+        period = EMUSTOP_PERIOD;
+        on_time = EMUSTOP_HALF;
+        break;
+
+    case LED_STATE_OVERTEMP:
+        period = OVERTEMP_PERIOD;
+        on_time = OVERTEMP_ON;
+        break;
+
+    default: // STARTUP et OVERCURRENT : niveau fixe, pas de motif
+        period = 1U;
+        on_time = 1U;
+        break;
+    }
+
     s_phase++;
+    if (s_phase >= period)
+    {
+        s_phase = 0U;
+    }
 
     switch (s_state)
     {
     case LED_STATE_NOMINAL:
-        blue = ((s_phase % NOMINAL_PERIOD) < NOMINAL_ON);
-        break;
-
     case LED_STATE_LINK_LOST:
-        blue = ((s_phase % LINK_LOST_PERIOD) < LINK_LOST_ON);
+        blue = (s_phase < on_time);
         break;
 
     case LED_STATE_EMUSTOP:
-        blue = ((s_phase % EMUSTOP_PERIOD) < EMUSTOP_HALF);
+        blue = (s_phase < on_time);
         red = !blue;
         break;
 
     case LED_STATE_OVERTEMP:
-        red = ((s_phase % OVERTEMP_PERIOD) < OVERTEMP_ON);
+        red = (s_phase < on_time);
         break;
 
     case LED_STATE_OVERCURRENT:

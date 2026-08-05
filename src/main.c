@@ -8,6 +8,7 @@
 #include "adc.h"
 #include "measure.h"
 #include "status_led.h"
+#include "control.h"
 #include "calib.h"
 
 extern uint16_t RamfuncsLoadStart;
@@ -71,13 +72,9 @@ static void start_conversion(void)
     stage_enable_set(STAGE_1, true);
     stage_enable_set(STAGE_2, true);
 
-    // ---- BRING-UP : duty applique d'un coup, SANS rampe de soft-start. --
-    // A REMPLACER par la rampe avant toute mise sous tension de la
-    // puissance, et a supprimer entierement quand control.c pilotera le
-    // duty (etape 8).
-    pwm_set_duty(STAGE_1, 0.5f);
-    pwm_set_duty(STAGE_2, 0.5f);
-    // ---------------------------------------------------------------------
+    // Le duty est desormais pilote par control.c, qui repart du minimum.
+    // Les deux etages demarrent ensemble.
+    control_start();
 }
 
 // Priorite 2 > 3 > 4 > 5 > 1 : EMUSTOP est le code le moins prioritaire
@@ -115,6 +112,7 @@ static fault_code_t compute_fault_code(const safety_faults_t *f)
 // reellement la charge (PROMPT §6 etape 6).
 static void enter_safe_state(void)
 {
+    control_stop();
     pwm_enable(STAGE_1, false);
     pwm_enable(STAGE_2, false);
     stage_enable_set(STAGE_1, false);
@@ -186,6 +184,10 @@ void main(void)
     // TZ6/EMUSTOP. Les entrees shunt sont maintenant reellement cablees, le
     // comparateur ne declenchera donc pas spontanement.
     safety_init();
+
+    // control_init() lit les periodes ePWM, donc apres pwm_init(), et avant
+    // adc_init() dont l'ISR appellera control_tick().
+    control_init();
 
     // ADC : declenche par ePWM1, donc apres pwm_init().
     adc_init();
@@ -273,8 +275,11 @@ void main(void)
             // ci-dessus, pas encore une mesure.
             t.freq1_hz = (float)PWM_STAGE1_FREQ_HZ;
             t.freq2_hz = (float)PWM_STAGE2_FREQ_HZ;
-            t.duty1_pct = 50.0f;
-            t.duty2_pct = 50.0f;
+            // Duty reellement en sortie, relu depuis CMPA. Pendant le
+            // balayage la valeur change bien plus vite que la cadence de
+            // telemetrie : c'est un echantillon, pas un suivi.
+            t.duty1_pct = pwm_get_duty(STAGE_1) * 100.0f;
+            t.duty2_pct = pwm_get_duty(STAGE_2) * 100.0f;
             t.vin_v = measure_vin(adc_get_raw(ADC_CH_VIN));
             t.iin_a = measure_iin(adc_get_raw(ADC_CH_IIN));
             t.v1_v = measure_v1(adc_get_raw(ADC_CH_V1));
@@ -303,12 +308,16 @@ void main(void)
 //
 // Les LED n'affichent plus l'etat de l'ADC mais celui des defauts, pilotees
 // depuis la boucle principale.
+// Aucune multiplication ni division ici : le rythme de la telemetrie est
+// obtenu par un compteur qui reboucle sur comparaison, pas par un modulo
+// (division logicielle sur C28x).
+#define TELEMETRY_PERIOD_TICKS  30U // 300 ms
+
 interrupt void cpu_timer0_isr(void)
 {
-    static uint16_t tick = 0;
+    static uint16_t telemetry_tick = 0;
 
     CpuTimer0.InterruptCount++;
-    tick++;
 
     status_led_tick();
 
@@ -317,9 +326,11 @@ interrupt void cpu_timer0_isr(void)
         s_ticks_since_cmd++; // sature au seuil, pas de rebouclage
     }
 
-    if ((tick % 30U) == 0U)
+    telemetry_tick++;
+    if (telemetry_tick >= TELEMETRY_PERIOD_TICKS)
     {
-        s_send_telemetry = true; // telemetrie toutes les 300 ms
+        telemetry_tick = 0U;
+        s_send_telemetry = true;
     }
 
     PieCtrlRegs.PIEACK.all = PIEACK_GROUP1;

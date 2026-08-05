@@ -1,5 +1,6 @@
 #include "DSP28x_Project.h"
 #include "adc.h"
+#include "control.h"
 #include "calib.h"
 
 // Valeurs du champ CHSEL (TRM SPRUI09A) : groupe A = 0x0..0x7,
@@ -18,6 +19,13 @@ static const uint16_t k_chsel[ADC_CH_COUNT] = {
 
 static volatile uint16_t s_raw[ADC_CH_COUNT];
 static volatile uint32_t s_seq_count = 0;
+
+// Note de mesure (instrumentation retiree) : la duree de cette ISR a ete
+// mesuree au scope en basculant une broche a l'entree et a la sortie.
+// Resultat apres correction des etats d'attente de la flash : 4,9 us pour
+// une periode de 15 us, soit 33 % de charge CPU a 66,85 kHz.
+// Ne PAS refaire cette mesure sur GPIO32 : c'est HV_EN, la commande de
+// l'optocoupleur VOM1271. Utiliser une broche libre (GPIO4, 6 ou 7).
 
 interrupt void adc_int1_isr(void);
 
@@ -135,6 +143,11 @@ interrupt void adc_int1_isr(void)
     }
 
     s_seq_count++;
+
+    // Point d'appel cadence de la commande (PROMPT §6 etape 8 : dt constant,
+    // dans l'ISR ADC ou PWM). Une sequence ADC complete = une decision.
+    // Doit rester tres court : ni flottant, ni division, ni attente.
+    control_tick();
 
     AdcRegs.ADCINTFLGCLR.bit.ADCINT1 = 1;
     PieCtrlRegs.PIEACK.all = PIEACK_GROUP1;

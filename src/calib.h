@@ -117,6 +117,13 @@
 // valeur, rouge sinon. 300 mV = 372 LSB en pleine echelle 3,3 V.
 #define ADC_TEST_THRESHOLD_V   0.3f
 
+// ---- Balayage de caracterisation (BRING-UP, boucle ouverte) ---------
+// Rampe montante puis descendante entre ces deux bornes, par pas de 1 LSB
+// de CMPA a chaque conversion ADC. Sert a mesurer la vitesse de correction
+// atteignable, pas a reguler. A supprimer avec le reste du harnais.
+#define CONTROL_SWEEP_MIN_PCT    1.0f
+#define CONTROL_SWEEP_MAX_PCT   50.0f
+
 // Frequences de decoupage par etage (point ouvert §9.1 du PROMPT, tranche au
 // bring-up). TBCLK = SYSCLKOUT = 60 MHz, TBPRD = SYSCLKOUT/Fpwm - 1 :
 //   etage 1 : 200 kHz -> TBPRD = 299
