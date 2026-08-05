@@ -50,6 +50,36 @@ static void update_overtemp(void)
         update_one_overtemp(s_overtemp_t2, measure_temp(adc_get_raw(ADC_CH_T2)));
 }
 
+// Sequence de demarrage de la conversion. Appelee au boot ET apres un
+// EMUSTOP : dans les deux cas on repart du meme etat connu, on ne reprend
+// jamais la conversion la ou elle s'etait arretee.
+//
+// Ordre impose : la decharge est inhibee AVANT d'autoriser les etages,
+// sinon la conversion travaillerait contre le circuit de decharge.
+static void start_conversion(void)
+{
+    hv_discharge_set(false);
+
+    // Duty a zero d'abord : c'est le point de depart obligatoire, un
+    // condensateur de sortie vide provoquerait sinon un appel de courant
+    // destructeur (PROMPT §6 etape 6).
+    pwm_set_duty(STAGE_1, 0.0f);
+    pwm_set_duty(STAGE_2, 0.0f);
+
+    pwm_enable(STAGE_1, true);
+    pwm_enable(STAGE_2, true);
+    stage_enable_set(STAGE_1, true);
+    stage_enable_set(STAGE_2, true);
+
+    // ---- BRING-UP : duty applique d'un coup, SANS rampe de soft-start. --
+    // A REMPLACER par la rampe avant toute mise sous tension de la
+    // puissance, et a supprimer entierement quand control.c pilotera le
+    // duty (etape 8).
+    pwm_set_duty(STAGE_1, 0.5f);
+    pwm_set_duty(STAGE_2, 0.5f);
+    // ---------------------------------------------------------------------
+}
+
 // Priorite 2 > 3 > 4 > 5 > 1 : EMUSTOP est le code le moins prioritaire
 // malgre son numero, pour ne jamais masquer une surintensite reelle.
 static fault_code_t compute_fault_code(const safety_faults_t *f)
@@ -161,14 +191,7 @@ void main(void)
     adc_init();
     uart_link_init();
 
-    // ---- BRING-UP : retest PWM + ADC, puissance DECONNECTEE ---------------
-    // A RETIRER avant toute mise sous tension de la carte de conversion.
-    // HV_EN et Stagex-EN restent a 0 (exclus de ce test).
-    pwm_set_duty(STAGE_1, 0.5f);
-    pwm_set_duty(STAGE_2, 0.5f);
-    pwm_enable(STAGE_1, true);
-    pwm_enable(STAGE_2, true);
-    // -----------------------------------------------------------------------
+    start_conversion();
 
     EALLOW;
     PieVectTable.TINT0 = &cpu_timer0_isr;
@@ -212,19 +235,29 @@ void main(void)
         // Aucun redemarrage automatique : rien ne reactive le PWM ensuite,
         // meme si la temperature redescend sous l'hysteresis ou si le defaut
         // disparait. Il faut un reset, ou une commande explicite (etape 8).
-        if (faults.stage1_fault || faults.stage2_fault
-            || s_overtemp_t1 || s_overtemp_t2)
+        if (faults.overcurrent || s_overtemp_t1 || s_overtemp_t2)
         {
+            // Defaut de PUISSANCE : verrouille jusqu'au cycle d'alimentation
+            // (PROMPT §8). Aucun acquittement, ni automatique ni par UART.
             enter_safe_state();
         }
-        else
+        else if (faults.emustop)
         {
-            // Inhiber la decharge AVANT d'autoriser les etages : jamais
-            // l'inverse, sinon on ferait travailler la conversion contre le
-            // circuit de decharge.
-            hv_discharge_set(false);
-            stage_enable_set(STAGE_1, true);
-            stage_enable_set(STAGE_2, true);
+            // EMUSTOP seul : ce n'est pas un defaut de puissance mais un
+            // artefact du debogueur. On autorise donc la reprise -- mais en
+            // repassant par la sequence de demarrage complete, jamais en
+            // reprenant la conversion la ou elle s'etait arretee.
+            //
+            // L'effacement ne peut aboutir qu'ici, CPU en marche : tant que
+            // le coeur est halte, EMUSTOP reste asserte et le drapeau se
+            // re-verrouille aussitot.
+            //
+            // La liaison est relancee aussi : pendant la halte l'ESP32 a
+            // continue d'emettre, l'anneau de reception a deborde et la
+            // ligne en cours est tronquee.
+            uart_link_restart();
+            safety_clear_faults();
+            start_conversion();
         }
 
         status_led_set_state(compute_led_state(&faults));

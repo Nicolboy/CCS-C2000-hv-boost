@@ -6,6 +6,16 @@
 
 void uart_link_init(void);
 
+// Remet la liaison a plat sans reconfigurer le baud ni les broches :
+// reset logiciel du SCI, vidage des FIFO, abandon de la ligne en cours
+// d'assemblage et de la trame en attente d'emission.
+//
+// A appeler apres une interruption prolongee du CPU (EMUSTOP) : pendant la
+// halte l'ESP32 a continue d'emettre, l'anneau de reception a deborde et
+// la ligne en cours est tronquee. Repartir propre evite de traiter des
+// fragments anterieurs a l'arret.
+void uart_link_restart(void);
+
 // Construit une trame $T,...*XX et la met en attente (docs/ESP32-UART.md).
 // NE BLOQUE PAS : rien n'est emis ici, c'est uart_link_service_tx() qui
 // alimente la ligne ensuite. Renvoie false si la trame precedente n'est pas

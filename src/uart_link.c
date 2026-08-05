@@ -151,6 +151,30 @@ static int append_field(char *out, int room, const char *tag, float value,
     return n;
 }
 
+void uart_link_restart(void)
+{
+    // Reset logiciel du SCI : vide les FIFO et efface les etats d'erreur.
+    SciaRegs.SCICTL1.bit.SWRESET = 0;
+    SciaRegs.SCICTL1.bit.SWRESET = 1;
+
+    SciaRegs.SCIFFRX.bit.RXFIFORESET = 0;
+    SciaRegs.SCIFFRX.bit.RXFIFORESET = 1;
+    SciaRegs.SCIFFRX.bit.RXFFOVRCLR = 1;
+    SciaRegs.SCIFFRX.bit.RXFFINTCLR = 1;
+
+    SciaRegs.SCIFFTX.bit.TXFIFOXRESET = 0;
+    SciaRegs.SCIFFTX.bit.TXFIFOXRESET = 1;
+
+    // On jette le contenu de l'anneau en avancant seulement la QUEUE.
+    // s_rx_head appartient a l'ISR : ne pas y toucher evite toute course.
+    s_rx_tail = s_rx_head;
+    s_line_len = 0;
+
+    // Trame d'emission en cours abandonnee : elle date d'avant l'arret.
+    s_tx_len = 0;
+    s_tx_pos = 0;
+}
+
 // Champ entier (FAULT). Meme convention de bornage que append_field :
 // renvoie 0 et n'ecrit rien si le champ ne tient pas.
 static int append_field_int(char *out, int room, const char *tag, int value)

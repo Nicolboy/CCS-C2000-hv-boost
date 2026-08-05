@@ -68,6 +68,22 @@ void safety_init(void)
     EPwm2Regs.TZSEL.bit.OSHT6 = 1;
     EPwm2Regs.TBCTL.bit.FREE_SOFT = 0;
 
+    // Efface un trip herite d'AVANT ce demarrage. TZFLG.OST est latche dans
+    // le materiel : il survit a un reset logiciel comme a un simple
+    // rechargement de programme, et sans ce clear le PWM resterait coupe
+    // sans raison visible.
+    //
+    // Sans danger : a ce stade pwm_init() a laisse les deux sorties forcees
+    // a l'etat bas (AQCSFRC), donc rien ne demarre. Et si la condition de
+    // defaut est toujours presente, le trip se re-verrouille immediatement
+    // -- on n'efface qu'un etat perime, jamais un defaut reel.
+    EPwm1Regs.TZCLR.bit.DCAEVT1 = 1;
+    EPwm1Regs.TZCLR.bit.OST = 1;
+    EPwm1Regs.TZCLR.bit.INT = 1;
+    EPwm2Regs.TZCLR.bit.DCAEVT1 = 1;
+    EPwm2Regs.TZCLR.bit.OST = 1;
+    EPwm2Regs.TZCLR.bit.INT = 1;
+
     PieVectTable.EPWM1_TZINT = &epwm1_tzint_isr;
     PieVectTable.EPWM2_TZINT = &epwm2_tzint_isr;
     EDIS;
