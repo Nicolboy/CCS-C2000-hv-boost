@@ -27,24 +27,54 @@ static volatile bool s_send_telemetry = false;
 #define LINK_TIMEOUT_TICKS      ((uint16_t)(UART_LINK_TIMEOUT_MS / TICK_MS))
 static volatile uint16_t s_ticks_since_cmd = LINK_TIMEOUT_TICKS;
 
-// Etat de surtemperature, avec hysteresis pour eviter le battement autour
-// du seuil.
-static bool s_overtemp = false;
+// Surtemperature, suivie PAR VOIE : le protocole distingue les codes 4 (T1)
+// et 5 (T2), un simple maximum ne permettrait pas de les separer.
+// Hysteresis pour eviter le battement autour du seuil.
+static bool s_overtemp_t1 = false;
+static bool s_overtemp_t2 = false;
+
+static bool update_one_overtemp(bool current, float temp_c)
+{
+    if (!current)
+    {
+        return (temp_c >= SAFETY_OVERTEMP_C);
+    }
+    return (temp_c > (SAFETY_OVERTEMP_C - SAFETY_OVERTEMP_HYST_C));
+}
 
 static void update_overtemp(void)
 {
-    float t1 = measure_temp(adc_get_raw(ADC_CH_T1));
-    float t2 = measure_temp(adc_get_raw(ADC_CH_T2));
-    float tmax = (t1 > t2) ? t1 : t2;
+    s_overtemp_t1 =
+        update_one_overtemp(s_overtemp_t1, measure_temp(adc_get_raw(ADC_CH_T1)));
+    s_overtemp_t2 =
+        update_one_overtemp(s_overtemp_t2, measure_temp(adc_get_raw(ADC_CH_T2)));
+}
 
-    if (!s_overtemp)
+// Priorite 2 > 3 > 4 > 5 > 1 : EMUSTOP est le code le moins prioritaire
+// malgre son numero, pour ne jamais masquer une surintensite reelle.
+static fault_code_t compute_fault_code(const safety_faults_t *f)
+{
+    if (f->overcurrent && f->stage1_fault)
     {
-        s_overtemp = (tmax >= SAFETY_OVERTEMP_C);
+        return FAULT_OVERCURRENT_I1;
     }
-    else
+    if (f->overcurrent && f->stage2_fault)
     {
-        s_overtemp = (tmax > (SAFETY_OVERTEMP_C - SAFETY_OVERTEMP_HYST_C));
+        return FAULT_OVERCURRENT_I2;
     }
+    if (s_overtemp_t1)
+    {
+        return FAULT_OVERTEMP_T1;
+    }
+    if (s_overtemp_t2)
+    {
+        return FAULT_OVERTEMP_T2;
+    }
+    if (f->emustop)
+    {
+        return FAULT_EMUSTOP;
+    }
+    return FAULT_NONE;
 }
 
 // Etat sur : les deux etages inhibes ET la sortie HT coupee.
@@ -60,6 +90,12 @@ static void enter_safe_state(void)
     stage_enable_set(STAGE_1, false);
     stage_enable_set(STAGE_2, false);
     hv_enable_set(false);
+
+    // Decharge active. Elle vient APRES la coupure de HV_EN : la charge est
+    // d'abord isolee, puis le condensateur vide en ~2 s. Sans elle, les
+    // 400 V resteraient presents pres d'une minute sur le seul bleeder de
+    // 1 MOhm, sans aucune indication une fois l'alimentation coupee.
+    hv_discharge_set(true);
 }
 
 // Priorite : surintensite > surtemperature > EMUSTOP > liaison perdue.
@@ -71,7 +107,7 @@ static led_state_t compute_led_state(const safety_faults_t *f)
     {
         return LED_STATE_OVERCURRENT;
     }
-    if (s_overtemp)
+    if (s_overtemp_t1 || s_overtemp_t2)
     {
         return LED_STATE_OVERTEMP;
     }
@@ -176,12 +212,17 @@ void main(void)
         // Aucun redemarrage automatique : rien ne reactive le PWM ensuite,
         // meme si la temperature redescend sous l'hysteresis ou si le defaut
         // disparait. Il faut un reset, ou une commande explicite (etape 8).
-        if (faults.stage1_fault || faults.stage2_fault || s_overtemp)
+        if (faults.stage1_fault || faults.stage2_fault
+            || s_overtemp_t1 || s_overtemp_t2)
         {
             enter_safe_state();
         }
         else
         {
+            // Inhiber la decharge AVANT d'autoriser les etages : jamais
+            // l'inverse, sinon on ferait travailler la conversion contre le
+            // circuit de decharge.
+            hv_discharge_set(false);
             stage_enable_set(STAGE_1, true);
             stage_enable_set(STAGE_2, true);
         }
@@ -210,6 +251,7 @@ void main(void)
             t.i2_a = measure_i2(adc_get_raw(ADC_CH_I2));
             t.t2_c = measure_temp(adc_get_raw(ADC_CH_T2));
             t.iout_a = measure_iout(adc_get_raw(ADC_CH_IOUT));
+            t.fault = compute_fault_code(&faults);
 
             uart_link_send_telemetry(&t);
             s_send_telemetry = false;

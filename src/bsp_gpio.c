@@ -43,12 +43,20 @@ void bsp_gpio_control_init(void)
     // HV_EN = GPIO32 (broche 31)
     GpioCtrlRegs.GPBMUX1.bit.GPIO32 = 0;
     GpioCtrlRegs.GPBDIR.bit.GPIO32 = 1;
+
+    // DISCHARGE = GPIO5 (broche 40)
+    GpioCtrlRegs.GPAMUX1.bit.GPIO5 = 0;
+    GpioCtrlRegs.GPADIR.bit.GPIO5 = 1;
     EDIS;
 
-    // Etat sur avant toute autre configuration.
+    // Etat sur avant toute autre configuration. La decharge est laissee
+    // ACTIVE : au demarrage, le condensateur de sortie peut encore etre
+    // charge par une session precedente, rien ne justifie de l'inhiber
+    // avant que la conversion ne soit reellement demandee.
     stage_enable_set(STAGE_1, false);
     stage_enable_set(STAGE_2, false);
     hv_enable_set(false);
+    hv_discharge_set(true);
 }
 
 void stage_enable_set(stage_id_t stage, bool enabled)
@@ -86,6 +94,20 @@ void hv_enable_set(bool enabled)
     else
     {
         GpioDataRegs.GPBCLEAR.bit.GPIO32 = 1;
+    }
+}
+
+void hv_discharge_set(bool active)
+{
+    // Niveau BAS = decharge active (NPN bloque, grille du MOSFET libre).
+    // Voir bsp_gpio.h pour le detail de la polarite inversee.
+    if (active)
+    {
+        GpioDataRegs.GPACLEAR.bit.GPIO5 = 1;
+    }
+    else
+    {
+        GpioDataRegs.GPASET.bit.GPIO5 = 1;
     }
 }
 

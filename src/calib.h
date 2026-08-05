@@ -96,7 +96,7 @@
 // PROVISOIRE : seuil a confirmer selon la tenue reelle du MOSFET et
 // l'implantation des NTC sur la carte.
 // L'hysteresis evite que l'etat oscille autour du point de bascule.
-#define SAFETY_OVERTEMP_C        85.0f
+#define SAFETY_OVERTEMP_C        80.0f
 #define SAFETY_OVERTEMP_HYST_C   10.0f
 
 // ---- Timeout de la liaison ESP32 (PROMPT §6 etape 7) ----------------
@@ -133,6 +133,6 @@
     ((uint16_t)(((UART_LSPCLK_HZ + 4UL * UART_BAUD_RATE) / (8UL * UART_BAUD_RATE)) - 1U))
 
 #define UART_RX_RING_SIZE   64U
-#define UART_LINE_MAX       160U   // limite cote ESP32 (g_lineBuf[160])
+#define UART_LINE_MAX       200U   // limite cote ESP32 (g_lineBuf[200])
 
 #endif

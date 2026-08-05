@@ -36,6 +36,26 @@ void stage_enable_set(stage_id_t stage, bool enabled);
 // donne PAS 0 V en sortie (PROMPT §6 etape 6).
 void hv_enable_set(bool enabled);
 
+// DISCHARGE (GPIO5, broche 40) : circuit de decharge rapide du condensateur
+// de sortie, sur la carte de puissance. 47 kOhm en serie avec un MOSFET,
+// soit ~2 s pour passer de 500 V a 50 V (tau = 0,94 s).
+//
+// POLARITE INVERSEE, et c'est le coeur du montage. Le GPIO pilote un NPN
+// qui court-circuite la grille du MOSFET :
+//   niveau HAUT -> NPN conduit -> grille a la masse -> MOSFET bloque
+//                  -> decharge INHIBEE (fonctionnement normal)
+//   niveau BAS, ou broche non pilotee
+//               -> NPN bloque -> grille tiree a 12 V (chaine 3x1 MOhm
+//                  depuis le +500 V, ecretee par Zener) -> MOSFET conduit
+//                  -> decharge ACTIVE
+//
+// GPIO5 est une broche a fonction PWM : ses pull-ups ne sont PAS actives au
+// reset (PROMPT §6 etape 3), elle flotte donc. La decharge est par
+// consequent active au reset, pendant un plantage, et surtout ALIMENTATION
+// COUPEE -- c'est-a-dire exactement le cas ou le firmware ne peut plus rien
+// garantir et ou l'operateur croit la carte inoffensive.
+void hv_discharge_set(bool active);
+
 // BRING-UP UNIQUEMENT -- bascule Stage1/2-default (GPIO1/GPIO3) en sortie
 // GPIO pilotee par logiciel, pour verifier le cablage des portes ET sans
 // etage de puissance actif. Laisse les deux broches a 0.

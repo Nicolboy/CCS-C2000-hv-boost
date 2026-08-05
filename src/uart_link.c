@@ -151,6 +151,26 @@ static int append_field(char *out, int room, const char *tag, float value,
     return n;
 }
 
+// Champ entier (FAULT). Meme convention de bornage que append_field :
+// renvoie 0 et n'ecrit rien si le champ ne tient pas.
+static int append_field_int(char *out, int room, const char *tag, int value)
+{
+    int n;
+
+    if (room <= 1)
+    {
+        return 0;
+    }
+
+    n = snprintf(out, (size_t)room, ",%s=%d", tag, value);
+    if (n < 0 || n >= room)
+    {
+        out[0] = '\0';
+        return 0;
+    }
+    return n;
+}
+
 // Construit la trame et la met en attente. NE BLOQUE PAS : l'emission reelle
 // se fait ensuite par uart_link_service_tx(), appelee quand la boucle
 // principale a du temps disponible. Renvoie false si la trame precedente
@@ -194,6 +214,12 @@ bool uart_link_send_telemetry(const telemetry_t *t)
     TX_ADD("I2", t->i2_a, 2);
     TX_ADD("T2", t->t2_c, 1);
     TX_ADD("IOUT", t->iout_a, 2);
+
+    {
+        int added_ = append_field_int(&s_tx_frame[n], TX_ROOM(), "FAULT",
+                                      (int)t->fault);
+        if (added_ == 0) { fields_dropped++; } else { n += added_; }
+    }
 
 #undef TX_ADD
 #undef TX_ROOM
