@@ -44,14 +44,32 @@
 #define MEAS_IOUT_A_PER_V        0.016667f
 
 // ---- Shunts MOSFET 0,02 ohm (doc §3) --------------------------------
-// PROVISOIRE : mesures faites avec les MCP6001 de banc. Le gain, fixe
-// par le reseau RF/RG, doit rester valable apres passage au TLV9151 ;
-// l'OFFSET en revanche est domine par le Vos de l'ampli et devra etre
-// ENTIEREMENT REMESURE. Les deux voies different d'environ 1 % :
-// garder deux jeux de constantes, ne jamais moyenner.
-#define MEAS_I1_OFFSET_V         0.0473f
+// Amplis TLV9151 montes sur la carte (remplacent les MCP6001 de banc).
+//
+// OFFSETS REMESURES a courant nul, carte alimentee au repos : la tension
+// lue EST l'offset, aucune injection n'est necessaire. Deux releves ont
+// donne 4 puis 0 count sur I1, et 0 count sur I2 -- soit AU PLUS 3,2 mV,
+// donc sous la resolution de l'ADC (0,8 mV/LSB). Contre 47,3 et 34,0 mV
+// avec les MCP6001 : le Vos d'entree est passe sous 0,1 mV une fois
+// ramene par le gain de 31,5.
+//
+// Retenir zero est le choix JUSTE et le choix SUR : c'est la meilleure
+// estimation, et pour le seuil de protection ci-dessous un offset
+// sous-estime abaisse le code DAC, donc fait declencher un peu plus tot.
+//
+// Limite a connaitre : l'ampli est en alimentation simple, sa sortie ne
+// peut pas descendre sous 0 V. Un Vos negatif serait donc ecrete et
+// indiscernable de zero -- et les tres faibles courants sont perdus dans
+// ce plancher. Sans consequence pour la protection (seuil a 1,9 V), mais
+// la mesure de courant n'est pas exploitable pres de zero.
+//
+// Le GAIN est fixe par le reseau RF/RG et n'a pas ete retouche : il reste
+// donc la seule partie non reverifiee de cette chaine. Les deux voies
+// different d'environ 1 %, garder deux jeux de constantes, ne jamais
+// moyenner.
+#define MEAS_I1_OFFSET_V         0.0f
 #define MEAS_I1_GAIN_V_PER_A     0.631f
-#define MEAS_I2_OFFSET_V         0.0340f
+#define MEAS_I2_OFFSET_V         0.0f
 #define MEAS_I2_GAIN_V_PER_A     0.637f
 
 // ---- NTC B57451V5103J062 (PROMPT §5) --------------------------------
@@ -61,6 +79,16 @@
 // (le PROMPT §5 donne cette relation inversee ; verifie sur ses propres
 // points de repere : 0,75 V a 0 C -> 34,2 kOhm, ce que beta=4000 predit,
 // alors que la forme inversee donnerait 2,94 kOhm, donc du chaud.)
+//
+// SENS VALIDE sur les vraies thermistances montees : rechauffer une NTC a
+// la main fait MONTER la valeur affichee. Le point restait indecidable
+// avec les 10 k fixes de test, qui donnent 25 C que la formule soit droite
+// ou inversee. C'etait un vrai trou de securite : inversee, une surchauffe
+// se serait lue comme un refroidissement et la coupure a 80 C n'aurait
+// jamais declenche.
+// Releve de coherence a l'ambiante : 2219 et 2208 counts -> 28,8 et
+// 28,5 C sur une carte alimentee, thermistances a 5 mm des MOSFET.
+//
 // R_fixe suppose a 10 kOhm : reste a confirmer sur la carte (doc §6).
 #define MEAS_NTC_R_FIXED_OHM     10000.0f
 #define MEAS_NTC_R25_OHM         10000.0f

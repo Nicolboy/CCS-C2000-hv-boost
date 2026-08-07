@@ -171,32 +171,63 @@ touche qu'aux valeurs de `calib.h`, pas au code.
       inférieur aux 34-47 mV actuels)
 
 ### Matériel restant à monter sur la carte élévateur
-- [ ] Composants de puissance (MOSFET IPD60R360, diode SiC STPSC406,
-      inductances) — carte actuellement à moitié complète
-- [ ] Driver de grille : **le UCC27518/19 initialement prévu ne convient
-      pas** (seuils d'entrée CMOS proportionnels à VDD = 12 V, un signal
-      3,3 V du F28027 ne les franchira jamais). Remplacer par UCC27517
-      (seuils CMOS/TTL indépendants de VDD, même boîtier SOT-23-5, même
-      brochage) — vérifier la polarité (inverseur/non-inverseur) requise
-      selon le sens voulu sur EN
-- [ ] TLV9151 : montage définitif à la place du MCP6001 de banc
+- [ ] Composants de puissance : NTD100N70GN1 (GaN, remplace l'IPD60R360
+      initialement prévu), diode SiC STPSC406, inductances — carte reçue,
+      montage en cours
+- [ ] Driver de grille : UCC27517 (remplace le UCC27518/19, seuils CMOS/TTL
+      indépendants de VDD) — alimenté par un régulateur LM317 séparé et
+      dédié à la carte puissance, réglé à **6V** (point de référence de la
+      datasheet NTD100N70GN1, pas 5V ni 7V)
+- [x] TLV9151 : monté à la place du MCP6001 de banc — **gains/offsets à
+      remesurer intégralement** avec ce composant avant de figer `calib.h`
+      (voir §3, mesures actuelles encore sur MCP6001)
+- [ ] **⚠️ MOSFET de décharge active — pas encore en place.** Le point
+      bloquant reste valable : ne monter directement qu'un composant
+      **600V minimum** (pas de passage intermédiaire par l'IRF840 500V
+      identifié comme sous-dimensionné), avant tout essai avec l'étage 2
+      sous tension.
 
 ### Firmware (TMS320F28027-dualboost, côté Claude Code / CCS)
-- [ ] Reporter les gains/offsets mesurés (§1-3) dans `calib.h`, avec la
-      structure par voie recommandée (gain, offset, seuil) plutôt que des
-      constantes isolées
+- [x] Boucle de régulation fermée câblée (`control.c`), machine à états
+      documentée dans `tms320_agent.md` (STATE 0-5)
+- [x] Protocole `$C`/`$T` étendu (`V1SET`, `VOSET`, `RUN`, `STATE`, `V1SP`,
+      `VOSP`, `REJ`) — voir `tms320_agent.md` / `esp32_agent.md`
+- [ ] Reporter les gains/offsets mesurés (§1-3, à refaire avec TLV9151)
+      dans `calib.h`, avec la structure par voie recommandée (gain, offset,
+      seuil) plutôt que des constantes isolées
 - [ ] Vérifier que le calcul de `DACVAL` est bien fait par macro à partir
       des constantes, pas en dur
-- [ ] Une fois le driver de grille corrigé et les composants de puissance
-      montés : test matériel de l'étape 2 du firmware (sécurité) avant
-      toute activation du PWM — critère : `TZFRC` force les sorties à 0,
-      un breakpoint coupe le PWM (TZ6/OSHT6), le flag ne se réarme pas
-      seul
+- [ ] Une fois le driver corrigé, les composants de puissance montés et le
+      MOSFET de décharge remplacé : test matériel de l'étape 2 du firmware
+      (sécurité) avant toute activation du PWM — critère : `TZFRC` force
+      les sorties à 0, un breakpoint coupe le PWM (TZ6/OSHT6), le flag ne
+      se réarme pas seul
 
-### Points de configuration matérielle en attente de confirmation
-- [ ] Fréquence de découpage par étage (100 ou 200 kHz)
+### Points de configuration matérielle
+- [x] Fréquence de découpage : étage 1 = **200 kHz**, étage 2 = **100 kHz**
 - [ ] Polarité réelle des LED (bleue/rouge)
 - [ ] Valeur d'inductance retenue par étage (47 ou 100 µH)
-- [ ] État de la liaison JTAG / UART après le dernier diagnostic (mesure
-      du 1,8 V sur VDD broches 32/43, recâblage croisé RX/TX) — à
-      confirmer que tout fonctionne avant de reprendre les tests
+- [x] JTAG réglé — carte CPU fonctionnelle (TMS320 + liaison ESP32 OK)
+- [x] Oscillateur : interne conservé (INTOSC1), UART à 57600 bauds pour
+      absorber la dérive — un quartz externe reste envisageable si besoin
+      de précision de fréquence de découpage plus tard (broches X1/X2
+      déjà réservées, pins 45-46)
+
+### Validation à faire lors de la prochaine session de mesures
+- [ ] **NTC** : thermistances 10kΩ montées (pont 10k/10k, bras symétriques
+      confirmés). Cette symétrie ne permet toujours pas de vérifier le
+      sens de la formule `R_ntc = R_fixe × (VREF-Vadc)/Vadc` par la seule
+      valeur à 25°C (une inversion de branche donnerait une courbe
+      plausible sans l'être) — un point de mesure à température connue
+      différente de 25°C (ex : fer à souder à distance contrôlée, ou eau
+      chaude sur la thermistance déposée) reste nécessaire pour trancher,
+      même avec ce montage symétrique.
+
+### Campagnes de mesure de rendement — état
+- Rendement **étage 1 seul** : calculable dès maintenant une fois le
+  matériel remonté, via `rendement_etage1 = (V1² / R) / (VIN × IIN)` avec
+  une charge résistive connue sur V1 et `VOSET=0` (mode étage 1 seul, voir
+  `tms320_agent.md`) — ne nécessite ni `IOUT` ni `I1`/`I2`.
+- Rendement **système complet** : reste bloqué tant que `IOUT` n'est pas
+  mesuré et que `IIN` n'a qu'un seul point de calibration. Nécessite aussi
+  l'étage 2 monté et le MOSFET de décharge remplacé.
