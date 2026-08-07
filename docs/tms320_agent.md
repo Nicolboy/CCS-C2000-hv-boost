@@ -294,3 +294,45 @@ Les quatre points ouverts de la révision précédente sont **traités** :
   sous tension de l'étage 2.
 - Sens de la formule NTC à valider avec une résistance asymétrique
   (4,7 kΩ ≈ 47 °C) : 10 k/10 k ne permet pas de discriminer.
+
+### Ce qui reste ouvert côté firmware — réglage de la boucle
+
+**Le gain de la régulation n'est pas réglé.** C'est le prochain travail,
+et il ne peut se faire que sur matériel alimenté.
+
+État actuel de la loi de commande (`calib.h`) :
+
+| Constante | Valeur | Rôle |
+|---|---|---|
+| `CTRL_SHIFT` | `12` | gain intégral = `1 / 2^12` par pas |
+| `CTRL_DECIM` | `13` | 1 pas de régulation toutes les 13 séquences ADC, soit ~5,1 kHz |
+| `CTRL_RAMP_V1_V_PER_STEP` | `0,01` | ~51 V/s sur l'étage 1 |
+
+`CTRL_SHIFT = 12` a été choisi **délibérément très bas**, sans aucun
+modèle du convertisseur : le boost à fort gain présente un zéro dans le
+demi-plan droit qui limite la bande passante atteignable, et démarrer trop
+raide risquait l'oscillation dès le premier essai. La réponse sera donc
+lente — c'est voulu, pas un défaut à corriger à l'aveugle.
+
+**Méthode de réglage, une fois l'étage 1 alimenté :**
+
+1. Observer au scope la réponse de V_inter à un échelon de consigne
+   (`V1SET` de 20 à 25 V par exemple), avec la charge résistive en place.
+2. Diminuer `CTRL_SHIFT` **par paliers d'une unité** — chaque unité double
+   le gain. S'arrêter dès qu'un dépassement ou une oscillation apparaît,
+   puis remonter d'un cran.
+3. Le terme **proportionnel** ne vient qu'après, une fois l'intégrateur
+   réglé : `duty = (accum >> CTRL_SHIFT) + (erreur >> CTRL_KP_SHIFT)`.
+   Un décalage supplémentaire, toujours sans multiplication ni division —
+   la discipline d'interruption du projet reste valable.
+
+**Point connu qui limitera le résultat en sortie HT** : à 500 V depuis
+35 V il faut D = 0,93, et `dV/dD = Vin/(1-D)²` donne alors **1 LSB de
+rapport cyclique ≈ 12 V** de quantification en sortie. La régulation
+oscillera irréductiblement entre deux valeurs adjacentes tant que le
+HRPWM/MEP n'est pas utilisé (~93 sous-pas par cycle SYSCLK, soit 14,8 bits
+au lieu de 8,2 — nécessite la bibliothèque SFO, non implémentée). Ce point
+ne concerne **pas** l'étage 1, où la quantification reste fine.
+
+Autre décision en suspens : la configuration « Debug » compile en `-O2`.
+À trancher avant de considérer le firmware figé.
