@@ -35,6 +35,27 @@ static uint16_t stage_index(stage_id_t stage)
     return (stage == STAGE_1) ? 0U : 1U;
 }
 
+// Place CMPB au milieu de la conduction du MOSFET, pour y declencher la
+// sequence ADC (voir adc.c). La conduction va de CTR=0 a CMPA : son milieu
+// est CMPA>>1. L'ADC echantillonnant a la FIN de sa fenetre d'acquisition,
+// on declenche ADC_ACQ_COUNTS plus tot.
+//
+// Uniquement un decalage, une soustraction et une comparaison : appelable
+// depuis l'ISR ADC sans enfreindre la regle "ni multiplication ni division".
+//
+// A duty faible la fenetre ne tient pas dans la conduction et la mesure est
+// moins bien centree. C'est sans enjeu : a ce niveau le courant est petit, et
+// la protection contre les surintensites ne depend pas de l'ADC -- elle passe
+// par les comparateurs analogiques, en continu.
+static void pwm_apply_adc_trigger(volatile struct EPWM_REGS *p)
+{
+    uint16_t mid = (uint16_t)(p->CMPA.half.CMPA >> 1);
+
+    p->CMPB = (mid > (uint16_t)ADC_ACQ_COUNTS)
+                  ? (uint16_t)(mid - (uint16_t)ADC_ACQ_COUNTS)
+                  : 1U;
+}
+
 // Recalcule CMPA a partir du duty et du TBPRD courants.
 static void pwm_apply_duty(stage_id_t stage)
 {
@@ -45,6 +66,7 @@ static void pwm_apply_duty(stage_id_t stage)
     // En up-count avec AQ_SET a zero et AQ_CLEAR sur CMPA, la sortie est
     // haute pendant CMPA cycles : duty = CMPA / (TBPRD + 1).
     p->CMPA.half.CMPA = (uint16_t)(duty * (float)(prd + 1U) + 0.5f);
+    pwm_apply_adc_trigger(p);
 }
 
 void pwm_init(void)
@@ -87,6 +109,13 @@ void pwm_init(void)
 
             p->CMPCTL.bit.SHDWAMODE = CC_SHADOW;
             p->CMPCTL.bit.LOADAMODE = CC_CTR_ZERO;
+
+            // CMPB porte l'instant de declenchement de l'ADC, pas une sortie.
+            // Meme regime d'ombre que CMPA : les deux doivent basculer au meme
+            // passage a zero, sinon l'instant de mesure correspondrait a un
+            // duty different de celui reellement applique dans la periode.
+            p->CMPCTL.bit.SHDWBMODE = CC_SHADOW;
+            p->CMPCTL.bit.LOADBMODE = CC_CTR_ZERO;
 
             // Haut a zero, bas sur CMPA -> impulsion en debut de periode.
             p->AQCTLA.bit.ZRO = AQ_SET;
@@ -198,6 +227,7 @@ void pwm_set_duty_counts(stage_id_t stage, uint16_t counts)
     }
 
     p->CMPA.half.CMPA = counts;
+    pwm_apply_adc_trigger(p);
 
     // PAS de mise a jour de la consigne flottante ici : cette fonction est
     // appelee depuis l'ISR ADC a plusieurs dizaines de kHz, et le F28027

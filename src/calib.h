@@ -136,10 +136,21 @@
 // pleine echelle 3,3 V. Conversion brut -> volts : V = raw * 3.3 / 4096.
 #define ADC_VREF_V          3.3f
 
-// Fenetre d'echantillonnage : ACQPS + 1 cycles ADCCLK (30 MHz ici).
-// 25 -> 26 cycles ~ 0,87 us, confortable meme avec une source de quelques
-// kilo-ohms (ponts diviseurs, pull-down de test).
+// Fenetre d'echantillonnage : ACQPS + 1 cycles SYSCLK -- et non ADCCLK, la
+// distinction compte pour tout ce qui suit. A 60 MHz, 26 cycles = 433 ns,
+// confortable meme avec une source de quelques kilo-ohms (ponts diviseurs).
+//
+// Duree totale d'une voie : 433 ns d'acquisition + 13 cycles ADCCLK de
+// conversion (30 MHz, soit 433 ns aussi) = 866 ns, les deux phases etant
+// sequentielles a cause de ADCNONOVERLAP. Les 9 voies font donc 7,8 us.
 #define ADC_ACQPS_CYCLES    25
+
+// La meme fenetre, exprimee en counts de TBCLK pour placer CMPB. TBCLK =
+// SYSCLK ici (TB_DIV1 et HSPCLKDIV = 1), la conversion est donc directe.
+//
+// L'ADC echantillonne a la FIN de la fenetre d'acquisition : pour viser un
+// instant donne, il faut declencher ce nombre de counts plus tot.
+#define ADC_ACQ_COUNTS      (ADC_ACQPS_CYCLES + 1)
 
 // =====================================================================
 // Regulation et bornes d'exploitation

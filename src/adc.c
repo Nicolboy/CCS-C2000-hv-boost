@@ -6,9 +6,9 @@
 // Valeurs du champ CHSEL (TRM SPRUI09A) : groupe A = 0x0..0x7,
 // groupe B = 0x8..0xF. L'ordre suit adc_channel_t / SOC0..SOC8.
 static const uint16_t k_chsel[ADC_CH_COUNT] = {
+    0x2, // ADCINA2 - I1 (shunt etage 1) -- en tete, cf. adc.h
     0x0, // ADCINA0 - VIN
     0x1, // ADCINA1 - IIN
-    0x2, // ADCINA2 - I1 (shunt etage 1)
     0x3, // ADCINA3 - IOUT
     0x4, // ADCINA4 - I2 (shunt etage 2)
     0xA, // ADCINB2 - VOUT
@@ -78,12 +78,23 @@ void adc_init(void)
     IER |= M_INT1;
     PieCtrlRegs.PIEIER1.bit.INTx1 = 1; // ADCINT1
 
-    // Declenchement par ePWM1 : SOCA sur passage a zero du compteur.
+    // Declenchement par ePWM1 sur CTRU=CMPB, et non plus sur le passage a
+    // zero. CMPB est place par pwm.c au milieu de la conduction du MOSFET,
+    // decale en amont de la fenetre d'acquisition.
+    //
+    // Le declenchement a zero avait deux defauts : il faisait echantillonner
+    // VIN exactement sur le front de mise en conduction, a chaque sequence et
+    // quel que soit le duty ; et l'instant de blocage, qui se deplace avec le
+    // duty, venait tomber dans la fenetre d'une voie ou d'une autre. Le milieu
+    // de la conduction est a l'inverse le point le plus eloigne des DEUX
+    // fronts, donc le plus calme du cycle.
+    //
     // SOCAPRD = 3 -> une sequence tous les 3 cycles PWM. A 200 kHz cela fait
     // ~66 kHz, largement suffisant pour la telemetrie et la surveillance,
-    // sans saturer le CPU d'interruptions.
+    // sans saturer le CPU d'interruptions. La sequence complete dure 7,8 us
+    // (9 voies x 866 ns), elle tient donc dans les 15 us disponibles.
     EALLOW;
-    EPwm1Regs.ETSEL.bit.SOCASEL = 1; // ET_CTR_ZERO
+    EPwm1Regs.ETSEL.bit.SOCASEL = ET_CTRU_CMPB;
     EPwm1Regs.ETPS.bit.SOCAPRD = 3;
     EPwm1Regs.ETSEL.bit.SOCAEN = 1;
     EDIS;

@@ -5,11 +5,21 @@
 #include <stdint.h>
 
 // Ordre des voies = ordre des SOC0..SOC8. Brochage LQFP48 PT, cf. PROMPT §2.
+//
+// I1 est en TETE, et ce n'est pas arbitraire. La sequence est declenchee au
+// milieu de la conduction du MOSFET (ePWM1 CTRU=CMPB, voir pwm.c) : seule la
+// premiere voie tombe donc exactement sur l'instant vise. Le shunt etant dans
+// la source du MOSFET, il ne voit du courant que pendant la conduction, et la
+// valeur au milieu de la rampe est sa moyenne sur cette phase.
+//
+// Les huit voies suivantes defilent ensuite, a 866 ns l'une de l'autre, en
+// grande partie pendant la phase bloquee. Tensions et temperatures ne
+// dependent d'aucun instant precis : elles prennent ce qui reste.
 typedef enum
 {
-    ADC_CH_VIN = 0, // broche 10, ADCINA0 (partagee avec VREFHI)
+    ADC_CH_I1 = 0,  // broche  9, ADCINA2 / COMP1A / AIO2  -- instant critique
+    ADC_CH_VIN,     // broche 10, ADCINA0 (partagee avec VREFHI)
     ADC_CH_IIN,     // broche  8, ADCINA1
-    ADC_CH_I1,      // broche  9, ADCINA2 / COMP1A / AIO2
     ADC_CH_IOUT,    // broche  7, ADCINA3
     ADC_CH_I2,      // broche  5, ADCINA4 / COMP2A / AIO4
     ADC_CH_VOUT,    // broche 14, ADCINB2 / AIO10
