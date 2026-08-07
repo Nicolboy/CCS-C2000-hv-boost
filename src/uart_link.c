@@ -239,12 +239,24 @@ bool uart_link_send_telemetry(const telemetry_t *t)
     TX_ADD("T2", t->t2_c, 1);
     TX_ADD("IOUT", t->iout_a, 2);
 
-    {
-        int added_ = append_field_int(&s_tx_frame[n], TX_ROOM(), "FAULT",
-                                      (int)t->fault);
-        if (added_ == 0) { fields_dropped++; } else { n += added_; }
-    }
+    // Consignes REELLEMENT appliquees : leur ecart avec ce que l'ESP32 a
+    // envoye est la seule facon pour lui de voir qu'une consigne a ete
+    // refusee. REJ compte les refus depuis le demarrage.
+    TX_ADD("V1SP", t->v1_setpoint_v, 1);
+    TX_ADD("VOSP", t->vout_setpoint_v, 1);
 
+#define TX_ADD_INT(tag_, val_)                                               \
+    do {                                                                     \
+        int added_ = append_field_int(&s_tx_frame[n], TX_ROOM(), (tag_),     \
+                                      (val_));                               \
+        if (added_ == 0) { fields_dropped++; } else { n += added_; }          \
+    } while (0)
+
+    TX_ADD_INT("STATE", (int)t->state);
+    TX_ADD_INT("REJ", (int)t->rejected);
+    TX_ADD_INT("FAULT", (int)t->fault);
+
+#undef TX_ADD_INT
 #undef TX_ADD
 #undef TX_ROOM
 
@@ -279,34 +291,121 @@ void uart_link_service_tx(void)
     }
 }
 
+// Decode un nombre decimal positif de la forme "123" ou "123.45", borne a
+// MAX_DIGITS chiffres de part et d'autre du point. S'arrete au premier
+// caractere non numerique (virgule de separation, '*', fin de chaine).
+//
+// Volontairement PAS atof/strtod : meme raisonnement que pour le checksum,
+// s_line n'est pas terminee et ces fonctions liraient au-dela. Et le
+// support flottant complet du RTS C28x est couteux (voir l'historique de
+// %f dans ce fichier).
+//
+// Renvoie false si aucun chiffre n'est trouve.
+#define PARSE_MAX_DIGITS  6U
+
+static bool parse_float(const char *s, float *out)
+{
+    uint32_t integer_part = 0U;
+    uint32_t frac_part = 0U;
+    uint32_t frac_scale = 1U;
+    uint16_t digits = 0U;
+    uint16_t i = 0U;
+
+    while ((s[i] >= '0') && (s[i] <= '9') && (digits < PARSE_MAX_DIGITS))
+    {
+        integer_part = (integer_part * 10U) + (uint32_t)(s[i] - '0');
+        digits++;
+        i++;
+    }
+
+    if (digits == 0U)
+    {
+        return false;
+    }
+
+    if (s[i] == '.')
+    {
+        i++;
+        digits = 0U;
+        while ((s[i] >= '0') && (s[i] <= '9') && (digits < PARSE_MAX_DIGITS))
+        {
+            frac_part = (frac_part * 10U) + (uint32_t)(s[i] - '0');
+            frac_scale *= 10U;
+            digits++;
+            i++;
+        }
+    }
+
+    *out = (float)integer_part + ((float)frac_part / (float)frac_scale);
+    return true;
+}
+
+// Cherche "TAG=" et decode la valeur numerique qui suit.
+static bool find_float(const char *body, const char *tag, float *out)
+{
+    const char *p = strstr(body, tag);
+
+    if (p == NULL)
+    {
+        return false;
+    }
+    return parse_float(p + strlen(tag), out);
+}
+
 // body pointe juste apres "C," ; len = nb de caracteres avant le '*'.
+//
+// Les tags sont tous OPTIONNELS et un tag inconnu est ignore : l'ESP32 peut
+// donc evoluer sans casser le TMS, et inversement. Une trame est acceptee
+// des lors qu'elle contient au moins un tag reconnu -- sinon on la rejette,
+// pour ne pas rafraichir le timeout de liaison sur une trame vide de sens.
 static bool parse_command(const char *body, command_state_t *cmd)
 {
     const char *p;
-    bool ht_found = false, pwm1_found = false, pwm2_found = false;
+    bool found = false;
+    float value;
 
     p = strstr(body, "HT=");
     if (p != NULL)
     {
         cmd->ht_enabled = (p[3] == '1');
-        ht_found = true;
+        found = true;
     }
 
+    p = strstr(body, "RUN=");
+    if (p != NULL)
+    {
+        cmd->run = (p[4] == '1');
+        found = true;
+    }
+
+    if (find_float(body, "V1SET=", &value))
+    {
+        cmd->v1_set_v = value;
+        found = true;
+    }
+
+    if (find_float(body, "VOSET=", &value))
+    {
+        cmd->vout_set_v = value;
+        found = true;
+    }
+
+    // Tags historiques : encore acceptes, ne pilotent plus rien.
     p = strstr(body, "PWM1=");
     if (p != NULL)
     {
         cmd->pwm1_enabled = (p[5] == '1');
-        pwm1_found = true;
+        found = true;
     }
 
     p = strstr(body, "PWM2=");
     if (p != NULL)
     {
         cmd->pwm2_enabled = (p[5] == '1');
-        pwm2_found = true;
+        found = true;
     }
 
-    return ht_found && pwm1_found && pwm2_found;
+    return found;
 }
 
 // Decode EXACTEMENT deux chiffres hexadecimaux. Renvoie false si l'un des

@@ -3,30 +3,50 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include "protocol.h"
 
-// Emplacement de la future regulation (PROMPT §6 etape 8). Pour l'instant
-// ce module ne contient PAS de regulation : il execute un balayage de duty
-// en boucle OUVERTE, destine a caracteriser la vitesse de correction
-// atteignable. Aucune mesure n'influence encore le duty.
+// Conduite de l'alimentation : machine d'etat de demarrage et regulation
+// des deux etages (PROMPT §6 etape 8).
 //
-// Le balayage va de CONTROL_SWEEP_MIN_PCT a CONTROL_SWEEP_MAX_PCT puis
-// revient, par pas de 1 LSB de CMPA a chaque conversion ADC -- c'est-a-dire
-// le plus petit increment realisable, et la cadence la plus rapide dont on
-// dispose sans ajouter d'interruption.
+// Le TMS ne connait qu'UNE consigne a la fois : c'est l'ESP32 qui orchestre
+// les sequences d'essai en envoyant les consignes une par une. Aucun
+// sequenceur ici, donc rien a verifier de ce cote, et une liaison perdue
+// coupe tout immediatement.
+//
+// Regulation : integrateur pur en virgule fixe, execute dans l'ISR ADC.
+// Ni multiplication ni division -- uniquement comparaisons, additions et
+// decalages, conformement a la discipline d'interruption du projet.
 
 void control_init(void);
 
-// Arme le balayage et repositionne les deux etages au duty minimal.
-void control_start(void);
+// Consignes, en volts. Renvoie false et NE MODIFIE RIEN si l'une des deux
+// est hors bornes : l'ancienne consigne reste appliquee et l'appelant doit
+// comptabiliser le rejet. On ne sature pas silencieusement, sinon une
+// erreur de commande passerait inapercue.
+bool control_set_setpoints(float v1_set_v, float vout_set_v);
 
-// Fige le balayage. Le duty n'est pas modifie : c'est pwm_enable() et le
-// Trip Zone qui coupent reellement les sorties.
-void control_stop(void);
+// Demande de marche. A false, retour immediat a l'arret.
+void control_set_run(bool run);
 
-// A appeler a CADENCE FIXE depuis l'ISR ADC (PROMPT §6 etape 8 : "prevoir
-// l'emplacement d'appel cadence, dt constant"). Ne fait rien si le balayage
-// n'est pas arme. Sans flottant ni division : un increment et une ecriture
-// de registre par etage.
+// Passage en defaut verrouille : les sorties sont coupees et plus rien ne
+// redemarre sans repasser par control_init() ou un cycle d'alimentation.
+void control_trip(void);
+
+// A appeler a CADENCE FIXE depuis l'ISR ADC. Decime en interne pour obtenir
+// le pas de regulation. Ne fait rien tant que la marche n'est pas demandee.
 void control_tick(void);
+
+// Lecture d'etat pour la telemetrie et l'affichage (boucle principale).
+ctrl_state_t control_get_state(void);
+
+// Defaut detecte PAR control.c lui-meme : survoltage V1 ou VOUT, surveille
+// dans l'ISR par comparaison sur la valeur brute. FAULT_NONE sinon. Les
+// defauts materiels (surintensite, EMUSTOP) remontent par safety.c.
+fault_code_t control_get_fault(void);
+float control_get_v1_setpoint(void);
+float control_get_vout_setpoint(void);
+
+// true quand l'etat autorise la mise sous tension de la sortie HT.
+bool control_hv_allowed(void);
 
 #endif

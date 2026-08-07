@@ -54,7 +54,25 @@ Champs (`TAG=valeur`, separes par des virgules, ordre libre) :
 | `I2` | A | Courant shunt MOSFET etage 2 |
 | `T2` | degC | Temperature NTC etage 2 |
 | `IOUT` | A | Courant de sortie |
-| `FAULT` | code 0-5 | Defaut courant (voir ci-dessous) |
+| `V1SP` | V | Consigne V_inter **reellement appliquee** |
+| `VOSP` | V | Consigne sortie **reellement appliquee** |
+| `STATE` | code 0-5 | Etat de la machine de conduite (voir ci-dessous) |
+| `REJ` | compteur | Consignes refusees depuis le demarrage |
+| `FAULT` | code 0-8 | Defaut courant (voir ci-dessous) |
+
+### Etats `STATE`
+
+| Code | Etat | Signification |
+|---|---|---|
+| `0` | IDLE | tout coupe, decharge active, en attente de `RUN=1` |
+| `1` | START_S1 | etage 1 en montee, consigne rampee depuis VIN |
+| `2` | RUN_S1 | V_inter etablie, etage 2 encore a zero |
+| `3` | START_S2 | etage 2 en montee, consigne rampee depuis V1 |
+| `4` | RUN | les deux etages regules -- **seul etat ou `HT=1` est pris en compte** |
+| `5` | FAULT | etat sur verrouille |
+
+Le demarrage est **cascade** : V_inter est etablie et stabilisee avant que
+l'etage 2 ne demarre, pour qu'il parte d'une tension d'entree connue.
 
 ### Codes `FAULT`
 
@@ -66,6 +84,9 @@ Champs (`TAG=valeur`, separes par des virgules, ordre libre) :
 | `3` | Surintensite I2 (etage 2) |
 | `4` | Temperature critique T1 (> 80 degC) |
 | `5` | Temperature critique T2 (> 80 degC) |
+| `6` | Survoltage V_inter (> 55 V) |
+| `7` | Survoltage sortie (> 520 V) |
+| `8` | Liaison ESP32 perdue (> 2 s sans trame `$C` valide) |
 
 **Priorite quand plusieurs defauts coexistent : 2 > 3 > 4 > 5 > 1.**
 EMUSTOP a donc la priorite la plus BASSE malgre son numero : en
@@ -76,6 +97,12 @@ jamais masquer une surintensite reelle.
 court-circuit franchit le meme comparateur et le meme seuil qu'une
 surintensite ; le firmware ne dispose d'aucune information permettant de
 les distinguer. Les codes 2 et 3 couvrent les deux cas.
+
+**Le code 8 (liaison perdue) n'est pas verrouille** : au-dela de 2 s sans
+trame `$C` valide, le TMS320 replie en etat sur (PWM inhibes, HT coupee,
+decharge active) mais repart des que la liaison revient et que `RUN=1` est
+redemande. La securite ne depend jamais de l'ESP32, mais une coupure de
+liaison n'est pas une avarie de puissance.
 
 #### Verrouillage : pas d'effacement par le protocole
 
@@ -165,18 +192,48 @@ contraire -- voir `mesure-cartepuissance.md` pour la tracabilite.
 ### Commande : ESP32 -> TMS320 (periodique + a chaque changement)
 
 ```
-$C,HT=1,PWM1=1,PWM2=0*3E
+$C,RUN=1,V1SET=35.0,VOSET=400.0,HT=1*XX
 ```
 
 | Tag | Valeurs | Description |
 |---|---|---|
-| `HT` | 0 ou 1 | Sortie HT activee/desactivee |
-| `PWM1` | 0 ou 1 | PWM etage 1 activee/desactivee |
-| `PWM2` | 0 ou 1 | PWM etage 2 activee/desactivee |
+| `RUN` | 0 ou 1 | Demande de marche. A 0, retour immediat a l'arret |
+| `V1SET` | **15 a 50** | Consigne V_inter, en volts |
+| `VOSET` | **200 a 500** | Consigne sortie HT, en volts |
+| `HT` | 0 ou 1 | Sortie HT. N'a d'effet qu'en `STATE=4` |
+| `PWM1`, `PWM2` | 0 ou 1 | **Historiques**, acceptes mais sans effet |
 
-L'ESP32 envoie cette trame toutes les **500 ms**, et immediatement a
-chaque changement depuis l'IHM. Le TMS320 applique le dernier etat recu et
-valide. Les trois tags doivent etre presents, sinon la trame est ignoree.
+**Tous les tags sont optionnels et un tag inconnu est ignore** : les deux
+firmwares peuvent evoluer independamment. Un champ absent garde sa derniere
+valeur connue. Une trame ne contenant aucun tag reconnu est rejetee et ne
+rafraichit pas le timeout de liaison.
+
+L'ESP32 envoie cette trame toutes les **500 ms**, et immediatement a chaque
+changement depuis l'IHM.
+
+#### Consigne hors bornes : refusee, jamais saturee
+
+Si `V1SET` ou `VOSET` sort de sa plage, **la commande numerique est refusee
+en bloc** : les deux anciennes consignes restent appliquees et `REJ`
+s'incremente. `RUN` et `HT` de la meme trame restent pris en compte, pour
+qu'une consigne aberrante n'empeche jamais un ordre d'arret de passer.
+
+On ne sature pas silencieusement : demander 600 V et obtenir 500 V sans
+avertissement laisserait croire que l'alimentation fait ce qu'on lui a
+demande. Comparer `VOSET` envoye et `VOSP` recu est le moyen de detecter le
+refus.
+
+#### Consignes lentes : c'est l'ESP32 qui orchestre
+
+Le TMS320 ne connait qu'une consigne a la fois et se contente de la reguler.
+Une sequence d'essai du type « sortie a 400 V, V_inter de 20 a 35 V par pas
+de 5 V » se pilote depuis l'ESP32, en envoyant les consignes une par une et
+en attendant la stabilisation entre chaque. Le TMS320 ne contient aucun
+sequenceur : il n'y a donc rien a verifier de ce cote, et une liaison perdue
+coupe tout immediatement.
+
+Un changement de consigne en marche est suivi **progressivement** : la
+rampe interne reste active en `STATE=4`, il n'y a pas de saut de consigne.
 
 ## Calcul du checksum
 

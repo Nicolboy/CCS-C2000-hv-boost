@@ -17,9 +17,21 @@ extern uint16_t RamfuncsRunStart;
 
 interrupt void cpu_timer0_isr(void);
 
-// Dernier CommandState recu, expose au debogueur.
-static volatile command_state_t g_last_cmd = {false, false, false};
+// Dernier CommandState recu, expose au debogueur. Les consignes partent aux
+// bornes basses : tant que l'ESP32 n'a rien envoye de valide, rien ne
+// demarre (run reste false de toute facon).
+static volatile command_state_t g_last_cmd = {
+    false,                   // ht_enabled
+    false,                   // run
+    CTRL_V1_SET_MIN_V,       // v1_set_v
+    CTRL_VOUT_SET_MIN_V,     // vout_set_v
+    false, false             // pwm1/pwm2, historiques
+};
 static volatile bool s_send_telemetry = false;
+
+// Consignes refusees depuis le demarrage, remontees en telemetrie : c'est
+// le seul moyen pour l'ESP32 de savoir qu'une commande n'a pas ete prise.
+static uint16_t s_rejected_count = 0;
 
 // Age de la derniere trame $C valide, en ticks de 10 ms. Incremente par
 // l'ISR, remis a zero par la boucle principale a chaque commande valide.
@@ -51,19 +63,16 @@ static void update_overtemp(void)
         update_one_overtemp(s_overtemp_t2, measure_temp(adc_get_raw(ADC_CH_T2)));
 }
 
-// Sequence de demarrage de la conversion. Appelee au boot ET apres un
-// EMUSTOP : dans les deux cas on repart du meme etat connu, on ne reprend
-// jamais la conversion la ou elle s'etait arretee.
+// Autorise la conversion : sorties PWM debridees et etages valides. Le duty
+// lui-meme est entierement pilote par control.c, qui part de la tension
+// mesuree et rampe -- il n'y a plus aucune valeur de duty en dur ici.
 //
 // Ordre impose : la decharge est inhibee AVANT d'autoriser les etages,
 // sinon la conversion travaillerait contre le circuit de decharge.
-static void start_conversion(void)
+static void enable_power_path(void)
 {
     hv_discharge_set(false);
 
-    // Duty a zero d'abord : c'est le point de depart obligatoire, un
-    // condensateur de sortie vide provoquerait sinon un appel de courant
-    // destructeur (PROMPT §6 etape 6).
     pwm_set_duty(STAGE_1, 0.0f);
     pwm_set_duty(STAGE_2, 0.0f);
 
@@ -71,16 +80,19 @@ static void start_conversion(void)
     pwm_enable(STAGE_2, true);
     stage_enable_set(STAGE_1, true);
     stage_enable_set(STAGE_2, true);
-
-    // Le duty est desormais pilote par control.c, qui repart du minimum.
-    // Les deux etages demarrent ensemble.
-    control_start();
 }
 
 // Priorite 2 > 3 > 4 > 5 > 1 : EMUSTOP est le code le moins prioritaire
 // malgre son numero, pour ne jamais masquer une surintensite reelle.
+static bool link_lost(void)
+{
+    return (s_ticks_since_cmd >= LINK_TIMEOUT_TICKS);
+}
+
 static fault_code_t compute_fault_code(const safety_faults_t *f)
 {
+    fault_code_t ctrl_fault;
+
     if (f->overcurrent && f->stage1_fault)
     {
         return FAULT_OVERCURRENT_I1;
@@ -89,6 +101,14 @@ static fault_code_t compute_fault_code(const safety_faults_t *f)
     {
         return FAULT_OVERCURRENT_I2;
     }
+
+    // Survoltage : detecte par control.c dans l'ISR, sur la valeur brute.
+    ctrl_fault = control_get_fault();
+    if (ctrl_fault != FAULT_NONE)
+    {
+        return ctrl_fault;
+    }
+
     if (s_overtemp_t1)
     {
         return FAULT_OVERTEMP_T1;
@@ -96,6 +116,10 @@ static fault_code_t compute_fault_code(const safety_faults_t *f)
     if (s_overtemp_t2)
     {
         return FAULT_OVERTEMP_T2;
+    }
+    if (link_lost())
+    {
+        return FAULT_LINK_LOST;
     }
     if (f->emustop)
     {
@@ -112,7 +136,7 @@ static fault_code_t compute_fault_code(const safety_faults_t *f)
 // reellement la charge (PROMPT §6 etape 6).
 static void enter_safe_state(void)
 {
-    control_stop();
+    control_set_run(false);
     pwm_enable(STAGE_1, false);
     pwm_enable(STAGE_2, false);
     stage_enable_set(STAGE_1, false);
@@ -193,7 +217,10 @@ void main(void)
     adc_init();
     uart_link_init();
 
-    start_conversion();
+    // Consignes de depart aux bornes basses, coherentes avec g_last_cmd.
+    // Rien ne demarre tant que l'ESP32 n'a pas envoye RUN=1 : le harnais de
+    // bring-up qui lancait la conversion d'office a ete retire.
+    (void)control_set_setpoints(CTRL_V1_SET_MIN_V, CTRL_VOUT_SET_MIN_V);
 
     EALLOW;
     PieVectTable.TINT0 = &cpu_timer0_isr;
@@ -211,13 +238,33 @@ void main(void)
 
     for (;;)
     {
-        command_state_t cmd;
+        // On PART de la commande courante : parse_command() ne renseigne que
+        // les tags presents dans la trame, et le protocole veut qu'un champ
+        // absent garde sa derniere valeur. Sans cette copie, `cmd` serait une
+        // variable de pile non initialisee -- une valeur residuelle pourrait
+        // activer RUN ou imposer une consigne arbitraire.
+        command_state_t cmd = g_last_cmd;
         safety_faults_t faults;
 
         if (uart_link_poll(&cmd))
         {
-            g_last_cmd = cmd;
             s_ticks_since_cmd = 0U;
+
+            // Consignes hors bornes : REFUSEES en bloc. L'ancienne reste
+            // appliquee et le refus est compte, plutot que de saturer
+            // silencieusement -- une erreur de commande doit se voir.
+            if (control_set_setpoints(cmd.v1_set_v, cmd.vout_set_v))
+            {
+                g_last_cmd = cmd;
+            }
+            else
+            {
+                s_rejected_count++;
+                // On retient quand meme HT et RUN : refuser une consigne
+                // numerique ne doit pas empecher un ordre d'arret de passer.
+                g_last_cmd.ht_enabled = cmd.ht_enabled;
+                g_last_cmd.run = cmd.run;
+            }
         }
 
         update_overtemp();
@@ -237,10 +284,22 @@ void main(void)
         // Aucun redemarrage automatique : rien ne reactive le PWM ensuite,
         // meme si la temperature redescend sous l'hysteresis ou si le defaut
         // disparait. Il faut un reset, ou une commande explicite (etape 8).
-        if (faults.overcurrent || s_overtemp_t1 || s_overtemp_t2)
+        if (faults.overcurrent || s_overtemp_t1 || s_overtemp_t2
+            || (control_get_fault() != FAULT_NONE))
         {
             // Defaut de PUISSANCE : verrouille jusqu'au cycle d'alimentation
             // (PROMPT §8). Aucun acquittement, ni automatique ni par UART.
+            control_trip();
+            enter_safe_state();
+        }
+        else if (link_lost())
+        {
+            // Liaison ESP32 perdue au-dela de 2 s : repli en etat sur, exige
+            // par le PROMPT §6 etape 7. La securite ne depend JAMAIS de
+            // l'ESP32 -- on ne reste pas en conversion sans superviseur.
+            //
+            // Ce n'est pas un defaut verrouille : la conversion peut
+            // redemarrer des que la liaison revient et que RUN est redemande.
             enter_safe_state();
         }
         else if (faults.emustop)
@@ -259,7 +318,27 @@ void main(void)
             // ligne en cours est tronquee.
             uart_link_restart();
             safety_clear_faults();
-            start_conversion();
+            enable_power_path();
+        }
+        else if (g_last_cmd.run)
+        {
+            // Marche demandee : on ouvre le chemin de puissance, control.c
+            // pilote le duty depuis la tension mesuree en rampant.
+            enable_power_path();
+            control_set_run(true);
+
+            // HV_EN n'est autorise qu'une fois les DEUX etages etablis, et
+            // seulement si l'operateur l'a demande. Un boost a 0 % de duty
+            // ne donne pas 0 V : HV_EN reste le seul organe qui isole
+            // reellement la charge (PROMPT §6 etape 6).
+            hv_enable_set(g_last_cmd.ht_enabled && control_hv_allowed());
+        }
+        else
+        {
+            // Repos : etat sur complet. Le chemin de puissance n'est PAS
+            // arme tant que la marche n'est pas demandee -- sinon on
+            // inhiberait la decharge et on armerait les sorties pour rien.
+            enter_safe_state();
         }
 
         status_led_set_state(compute_led_state(&faults));
@@ -290,6 +369,11 @@ void main(void)
             t.t2_c = measure_temp(adc_get_raw(ADC_CH_T2));
             t.iout_a = measure_iout(adc_get_raw(ADC_CH_IOUT));
             t.fault = compute_fault_code(&faults);
+
+            t.state = control_get_state();
+            t.v1_setpoint_v = control_get_v1_setpoint();
+            t.vout_setpoint_v = control_get_vout_setpoint();
+            t.rejected = s_rejected_count;
 
             uart_link_send_telemetry(&t);
             s_send_telemetry = false;

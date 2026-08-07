@@ -113,16 +113,63 @@
 // kilo-ohms (ponts diviseurs, pull-down de test).
 #define ADC_ACQPS_CYCLES    25
 
-// Seuil du test de bring-up ADC : LED bleue si une voie passe SOUS cette
-// valeur, rouge sinon. 300 mV = 372 LSB en pleine echelle 3,3 V.
-#define ADC_TEST_THRESHOLD_V   0.3f
+// =====================================================================
+// Regulation et bornes d'exploitation
+// =====================================================================
 
-// ---- Balayage de caracterisation (BRING-UP, boucle ouverte) ---------
-// Rampe montante puis descendante entre ces deux bornes, par pas de 1 LSB
-// de CMPA a chaque conversion ADC. Sert a mesurer la vitesse de correction
-// atteignable, pas a reguler. A supprimer avec le reste du harnais.
-#define CONTROL_SWEEP_MIN_PCT    1.0f
-#define CONTROL_SWEEP_MAX_PCT   50.0f
+// ---- Bornes des consignes acceptees ---------------------------------
+// Une consigne hors de ces bornes est REFUSEE : l'ancienne est conservee
+// et le rejet est signale en telemetrie. On ne sature pas silencieusement,
+// sinon une erreur de commande passerait inapercue.
+#define CTRL_V1_SET_MIN_V       15.0f
+#define CTRL_V1_SET_MAX_V       50.0f
+#define CTRL_VOUT_SET_MIN_V    200.0f
+#define CTRL_VOUT_SET_MAX_V    500.0f
+
+// ---- Seuils de coupure en survoltage --------------------------------
+// Verifies dans l'ISR ADC par simple comparaison sur la valeur brute.
+// Restent sous les pleines echelles mesurees (103 V et 600 V), donc la
+// mesure ne sature jamais avant que la protection n'agisse.
+#define CTRL_V1_OV_TRIP_V        55.0f
+#define CTRL_VOUT_OV_TRIP_V     520.0f
+
+// ---- Limites de rapport cyclique ------------------------------------
+// duty max < 1 imperativement : a 500 V depuis 35 V il faut deja D = 0,93,
+// la marge est donc mince. duty min a 0 : un boost a 0 % laisse malgre tout
+// passer Vin par L et la diode, ce n'est pas une coupure.
+#define CTRL_DUTY_MIN            0.0f
+#define CTRL_DUTY_MAX            0.95f
+
+// ---- Loi de commande : integrateur pur, virgule fixe -----------------
+// duty_counts = accumulateur >> CTRL_SHIFT, l'accumulateur recevant
+// l'erreur brute a chaque pas. Aucune multiplication ni division, donc
+// utilisable en ISR (regle : que des comparaisons, additions, decalages).
+//
+// Le gain integral vaut 1 / 2^CTRL_SHIFT par pas de regulation. Volontaire-
+// ment tres faible pour demarrer : le boost a fort gain presente un zero
+// dans le demi-plan droit qui limite la bande passante atteignable, et on
+// n'a aucun modele du convertisseur. A augmenter par paliers apres mesure
+// de la reponse reelle. Le terme proportionnel viendra ensuite.
+#define CTRL_SHIFT               12U
+
+// Decimation depuis l'ISR ADC (66,7 kHz) : une regulation toutes les
+// CTRL_DECIM sequences, soit ~5,1 kHz. Donne un dt rigoureusement constant.
+#define CTRL_DECIM               13U
+
+// ---- Rampe de demarrage ----------------------------------------------
+// On rampe la CONSIGNE et non le duty : la boucle reste fermee pendant
+// toute la montee. Exprimee en volts par pas de regulation.
+// 0,01 V/pas a 5,1 kHz -> ~51 V/s sur l'etage 1, la montee de 10 a 50 V
+// prend donc environ 0,8 s.
+#define CTRL_RAMP_V1_V_PER_STEP     0.01f
+#define CTRL_RAMP_VOUT_V_PER_STEP   0.10f
+
+// ---- Criteres de passage d'etat --------------------------------------
+// L'etage est declare etabli quand l'ecart reste sous tolerance pendant
+// cette duree, exprimee en pas de regulation (~5,1 kHz).
+#define CTRL_SETTLE_TOL_V1_V        1.0f
+#define CTRL_SETTLE_TOL_VOUT_V     10.0f
+#define CTRL_SETTLE_STEPS         500U   // ~100 ms
 
 // Frequences de decoupage par etage (point ouvert §9.1 du PROMPT, tranche au
 // bring-up). TBCLK = SYSCLKOUT = 60 MHz, TBPRD = SYSCLKOUT/Fpwm - 1 :
