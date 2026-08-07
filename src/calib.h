@@ -126,6 +126,18 @@
 #define CTRL_VOUT_SET_MIN_V    200.0f
 #define CTRL_VOUT_SET_MAX_V    500.0f
 
+// Consigne de sortie EXACTEMENT nulle : convention signifiant "etage 2
+// desactive". La machine s'arrete alors a l'etage 1 etabli, l'etage 2 reste
+// a duty 0 et HV_EN est interdit. C'est le mode de validation du seul
+// premier etage, quand le MOSFET, la diode et l'inductance de l'etage 2 ne
+// sont pas montes -- sans lui la machine resterait bloquee en START_S2, la
+// sortie ne pouvant jamais atteindre 200 V.
+//
+// Zero est sans ambiguite : ce n'est pas une consigne de sortie plausible,
+// et toute valeur strictement comprise entre 0 et la borne basse reste
+// refusee comme avant.
+#define CTRL_VOSET_DISABLED      0.0f
+
 // ---- Seuils de coupure en survoltage --------------------------------
 // Verifies dans l'ISR ADC par simple comparaison sur la valeur brute.
 // Restent sous les pleines echelles mesurees (103 V et 600 V), donc la

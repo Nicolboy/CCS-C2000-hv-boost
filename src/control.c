@@ -50,6 +50,11 @@ static volatile fault_code_t s_fault = FAULT_NONE;
 static volatile bool s_run_requested = false;
 static volatile bool s_trip_requested = false;
 
+// Etage 2 actif ? A false (consigne de sortie nulle), la machine s'arrete a
+// l'etage 1 etabli et l'etage 2 reste a duty 0. Ne change JAMAIS en marche :
+// control_set_setpoints() refuse une bascule tant qu'on n'est pas a l'arret.
+static volatile bool s_s2_enabled = false;
+
 // Consignes cibles, en counts (ecrites par la boucle principale).
 static volatile int32_t s_target_raw[2] = {0, 0};
 // Consignes effectivement appliquees, rampees, en Q8.
@@ -158,6 +163,7 @@ void control_init(void)
 
     s_state = CTRL_STATE_IDLE;
     s_fault = FAULT_NONE;
+    s_s2_enabled = false; // rien ne demarre l'etage 2 sans consigne explicite
     s_run_requested = false;
     s_trip_requested = false;
     s_settle_count = 0;
@@ -168,19 +174,38 @@ void control_init(void)
 
 bool control_set_setpoints(float v1_set_v, float vout_set_v)
 {
+    // Consigne de sortie nulle = etage 2 desactive (CTRL_VOSET_DISABLED).
+    bool s2_on = (vout_set_v > CTRL_VOSET_DISABLED);
+
     // Refus en bloc si l'une des deux est hors bornes : on ne sature pas et
     // on n'applique pas la moitie d'une commande.
     if (v1_set_v < CTRL_V1_SET_MIN_V || v1_set_v > CTRL_V1_SET_MAX_V)
     {
         return false;
     }
-    if (vout_set_v < CTRL_VOUT_SET_MIN_V || vout_set_v > CTRL_VOUT_SET_MAX_V)
+    if (vout_set_v < CTRL_VOSET_DISABLED)
+    {
+        return false; // negatif : ni une consigne, ni la desactivation
+    }
+    if (s2_on
+        && (vout_set_v < CTRL_VOUT_SET_MIN_V || vout_set_v > CTRL_VOUT_SET_MAX_V))
+    {
+        return false;
+    }
+
+    // Activer ou desactiver l'etage 2 EN MARCHE est refuse. L'activer
+    // ferait demarrer l'etage 2 avec un integrateur et une rampe hors
+    // contexte, donc par un a-coup de rapport cyclique ; le desactiver
+    // couperait la sortie sans passer par l'etat sur. Il faut repasser par
+    // RUN=0, ce qui ramene la machine en IDLE et reinitialise les rampes.
+    if ((s2_on != s_s2_enabled) && (s_state != CTRL_STATE_IDLE))
     {
         return false;
     }
 
     s_target_raw[S1] = V1_VOLTS_TO_RAW(v1_set_v);
-    s_target_raw[S2] = VOUT_VOLTS_TO_RAW(vout_set_v);
+    s_target_raw[S2] = s2_on ? VOUT_VOLTS_TO_RAW(vout_set_v) : 0;
+    s_s2_enabled = s2_on;
     return true;
 }
 
@@ -214,9 +239,16 @@ float control_get_vout_setpoint(void)
     return (float)s_target_raw[S2] / VOUT_RAW_PER_VOLT;
 }
 
+bool control_s2_enabled(void)
+{
+    return s_s2_enabled;
+}
+
 bool control_hv_allowed(void)
 {
-    return (s_state == CTRL_STATE_RUN);
+    // Etage 2 desactive : il n'y a pas de sortie HT a mettre sous tension,
+    // meme une fois l'etage 1 etabli. HV_EN reste donc interdit.
+    return (s_state == CTRL_STATE_RUN) && s_s2_enabled;
 }
 
 // ---- Boucle de conduite, appelee depuis l'ISR ADC ----------------------
@@ -300,7 +332,11 @@ void control_tick(void)
             if (s_settle_count >= CTRL_SETTLE_STEPS)
             {
                 s_settle_count = 0;
-                s_state = CTRL_STATE_RUN_S1;
+                // Etage 2 desactive : l'etablissement de l'etage 1 EST le
+                // regime etabli, on ne passe jamais par START_S2. Sans cela
+                // la machine y resterait indefiniment, la sortie ne pouvant
+                // pas atteindre sa consigne sans etage de puissance monte.
+                s_state = s_s2_enabled ? CTRL_STATE_RUN_S1 : CTRL_STATE_RUN;
             }
         }
         else
@@ -349,8 +385,19 @@ void control_tick(void)
         // exactement le cas d'usage des essais par paliers.
         ramp_toward(S1, V1_RAMP_STEP_Q8);
         (void)regulate(S1, v1_raw);
-        ramp_toward(S2, VOUT_RAMP_STEP_Q8);
-        (void)regulate(S2, vout_raw);
+
+        if (s_s2_enabled)
+        {
+            ramp_toward(S2, VOUT_RAMP_STEP_Q8);
+            (void)regulate(S2, vout_raw);
+        }
+        else
+        {
+            // Duty force a zero a CHAQUE pas, pas seulement sur la
+            // transition : rien ne doit pouvoir laisser une valeur
+            // residuelle dans CMPA de l'etage 2.
+            stage_reset(S2);
+        }
         break;
     }
 }

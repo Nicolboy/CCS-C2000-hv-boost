@@ -20,11 +20,17 @@ interrupt void cpu_timer0_isr(void);
 // Dernier CommandState recu, expose au debogueur. Les consignes partent aux
 // bornes basses : tant que l'ESP32 n'a rien envoye de valide, rien ne
 // demarre (run reste false de toute facon).
+//
+// vout_set_v part a CTRL_VOSET_DISABLED, donc etage 2 DESACTIVE par defaut.
+// C'est l'etat de la carte tant que le MOSFET, la diode et l'inductance de
+// l'etage 2 ne sont pas montes ; le defaut le plus sur est de ne rien
+// commander sur un etage absent. L'ESP32 doit envoyer un VOSET valide pour
+// l'activer.
 static volatile command_state_t g_last_cmd = {
     false,                   // ht_enabled
     false,                   // run
     CTRL_V1_SET_MIN_V,       // v1_set_v
-    CTRL_VOUT_SET_MIN_V,     // vout_set_v
+    CTRL_VOSET_DISABLED,     // vout_set_v : etage 2 desactive
     false, false             // pwm1/pwm2, historiques
 };
 static volatile bool s_send_telemetry = false;
@@ -71,15 +77,21 @@ static void update_overtemp(void)
 // sinon la conversion travaillerait contre le circuit de decharge.
 static void enable_power_path(void)
 {
+    // Etage 2 desactive (consigne de sortie nulle) : sa porte ET reste
+    // fermee et sa sortie ePWM inhibee. control.c maintient deja son duty a
+    // zero, mais ne pas armer la porte rend l'etage franchement inerte --
+    // ce qui est observable au scope, donc verifiable.
+    bool s2 = control_s2_enabled();
+
     hv_discharge_set(false);
 
     pwm_set_duty(STAGE_1, 0.0f);
     pwm_set_duty(STAGE_2, 0.0f);
 
     pwm_enable(STAGE_1, true);
-    pwm_enable(STAGE_2, true);
+    pwm_enable(STAGE_2, s2);
     stage_enable_set(STAGE_1, true);
-    stage_enable_set(STAGE_2, true);
+    stage_enable_set(STAGE_2, s2);
 }
 
 // Priorite 2 > 3 > 4 > 5 > 1 : EMUSTOP est le code le moins prioritaire
@@ -220,7 +232,7 @@ void main(void)
     // Consignes de depart aux bornes basses, coherentes avec g_last_cmd.
     // Rien ne demarre tant que l'ESP32 n'a pas envoye RUN=1 : le harnais de
     // bring-up qui lancait la conversion d'office a ete retire.
-    (void)control_set_setpoints(CTRL_V1_SET_MIN_V, CTRL_VOUT_SET_MIN_V);
+    (void)control_set_setpoints(CTRL_V1_SET_MIN_V, CTRL_VOSET_DISABLED);
 
     EALLOW;
     PieVectTable.TINT0 = &cpu_timer0_isr;

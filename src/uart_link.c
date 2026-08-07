@@ -225,6 +225,23 @@ bool uart_link_send_telemetry(const telemetry_t *t)
         if (added_ == 0) { fields_dropped++; } else { n += added_; }          \
     } while (0)
 
+#define TX_ADD_INT(tag_, val_)                                               \
+    do {                                                                     \
+        int added_ = append_field_int(&s_tx_frame[n], TX_ROOM(), (tag_),     \
+                                      (val_));                               \
+        if (added_ == 0) { fields_dropped++; } else { n += added_; }          \
+    } while (0)
+
+    // ETAT DE SECURITE EN TETE, avant toute mesure. Un champ qui ne tient
+    // pas dans la trame est ABANDONNE, et l'ESP32 conserve alors sa derniere
+    // valeur connue : si FAULT etait emis en dernier, un debordement le
+    // ferait disparaitre et l'ESP32 continuerait d'afficher 0 pendant qu'un
+    // defaut reel est actif. Les grandeurs analogiques, elles, peuvent etre
+    // perdues sans consequence.
+    TX_ADD_INT("FAULT", (int)t->fault);
+    TX_ADD_INT("STATE", (int)t->state);
+    TX_ADD_INT("REJ", (int)t->rejected);
+
     TX_ADD("FREQ1", t->freq1_hz, 0);
     TX_ADD("FREQ2", t->freq2_hz, 0);
     TX_ADD("DUTY1", t->duty1_pct, 1);
@@ -242,19 +259,9 @@ bool uart_link_send_telemetry(const telemetry_t *t)
     // Consignes REELLEMENT appliquees : leur ecart avec ce que l'ESP32 a
     // envoye est la seule facon pour lui de voir qu'une consigne a ete
     // refusee. REJ compte les refus depuis le demarrage.
+    // VOSP = 0 signifie etage 2 DESACTIVE, pas une consigne de 0 V.
     TX_ADD("V1SP", t->v1_setpoint_v, 1);
     TX_ADD("VOSP", t->vout_setpoint_v, 1);
-
-#define TX_ADD_INT(tag_, val_)                                               \
-    do {                                                                     \
-        int added_ = append_field_int(&s_tx_frame[n], TX_ROOM(), (tag_),     \
-                                      (val_));                               \
-        if (added_ == 0) { fields_dropped++; } else { n += added_; }          \
-    } while (0)
-
-    TX_ADD_INT("STATE", (int)t->state);
-    TX_ADD_INT("REJ", (int)t->rejected);
-    TX_ADD_INT("FAULT", (int)t->fault);
 
 #undef TX_ADD_INT
 #undef TX_ADD

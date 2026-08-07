@@ -23,6 +23,14 @@ void control_init(void);
 // est hors bornes : l'ancienne consigne reste appliquee et l'appelant doit
 // comptabiliser le rejet. On ne sature pas silencieusement, sinon une
 // erreur de commande passerait inapercue.
+//
+// vout_set_v == 0 (CTRL_VOSET_DISABLED) desactive l'etage 2 : la machine
+// s'arrete a l'etage 1 etabli et HV_EN reste interdit. Ce mode sert a
+// valider le premier etage seul, etage 2 non monte.
+//
+// Bascule activer/desactiver l'etage 2 : REFUSEE tant que la machine n'est
+// pas a l'arret (RUN=0). Changer cela en marche produirait un a-coup de
+// rapport cyclique ou une coupure hors etat sur.
 bool control_set_setpoints(float v1_set_v, float vout_set_v);
 
 // Demande de marche. A false, retour immediat a l'arret.
@@ -46,7 +54,13 @@ fault_code_t control_get_fault(void);
 float control_get_v1_setpoint(void);
 float control_get_vout_setpoint(void);
 
-// true quand l'etat autorise la mise sous tension de la sortie HT.
+// false quand la consigne de sortie est nulle : l'etage 2 est desactive et
+// son duty reste a zero. La boucle principale s'en sert pour ne pas armer la
+// porte ET de l'etage 2 inutilement.
+bool control_s2_enabled(void);
+
+// true quand l'etat autorise la mise sous tension de la sortie HT. Toujours
+// false si l'etage 2 est desactive : il n'y a alors pas de sortie HT.
 bool control_hv_allowed(void);
 
 #endif

@@ -34,8 +34,23 @@ en hexadecimal (2 chiffres, majuscules).
 ### Telemetrie : TMS320 -> ESP32 (periodique)
 
 ```
-$T,FREQ1=200000,FREQ2=100000,DUTY1=45.2,DUTY2=50.0,VIN=400.5,IIN=1.20,V1=200.3,I1=2.50,T1=45.2,VOUT=200.1,I2=2.48,T2=44.8,IOUT=1.05,FAULT=0*XX
+$T,FAULT=0,STATE=4,REJ=0,FREQ1=200000,FREQ2=100000,DUTY1=68.4,DUTY2=0.0,VIN=12.1,IIN=0.61,V1=35.0,I1=0.62,T1=38.4,VOUT=0.3,I2=0.00,T2=36.1,IOUT=0.00,V1SP=35.0,VOSP=0.0*XX
 ```
+
+(exemple reel en mode **etage 1 seul** : `VOSP=0.0`, `DUTY2=0.0`.)
+
+### Ordre des champs : `FAULT`, `STATE` et `REJ` viennent en premier
+
+Ce n'est pas cosmetique. La trame complete fait environ **175 caracteres
+sur les 200** autorises, et le formateur cote TMS320 **abandonne** un champ
+qui ne tiendrait pas plutot que de deborder. Comme un champ absent laisse
+l'ESP32 sur sa derniere valeur connue, emettre `FAULT` en fin de trame
+signifierait qu'un debordement le fait disparaitre -- et que l'ESP32
+continue d'afficher `FAULT=0` pendant qu'un defaut reel est actif.
+
+L'etat de securite passe donc avant les mesures : perdre `T2` ou `IOUT` est
+sans consequence, perdre `FAULT` ne l'est pas. L'ESP32 ne doit jamais
+supposer un ordre autre que celui-ci pour les trois premiers champs.
 
 Champs (`TAG=valeur`, separes par des virgules, ordre libre) :
 
@@ -66,10 +81,19 @@ Champs (`TAG=valeur`, separes par des virgules, ordre libre) :
 |---|---|---|
 | `0` | IDLE | tout coupe, decharge active, en attente de `RUN=1` |
 | `1` | START_S1 | etage 1 en montee, consigne rampee depuis VIN |
-| `2` | RUN_S1 | V_inter etablie, etage 2 encore a zero |
+| `2` | RUN_S1 | V_inter etablie, etage 2 encore a zero -- **transitoire** |
 | `3` | START_S2 | etage 2 en montee, consigne rampee depuis V1 |
 | `4` | RUN | les deux etages regules -- **seul etat ou `HT=1` est pris en compte** |
 | `5` | FAULT | etat sur verrouille |
+
+`STATE=2` ne dure **qu'un seul pas de regulation, soit environ 200 us**.
+Aucun interrogateur cadence a la seconde ne l'observera jamais : ne pas
+ecrire de logique qui l'attend.
+
+En mode **etage 1 seul** (`VOSET=0`, voir plus bas), la machine passe
+directement de `1` a `4` : `2` et `3` ne sont jamais traverses, et `4`
+signifie alors « etage 1 etabli », pas « les deux etages etablis ». Le seul
+moyen de distinguer les deux cas est `VOSP` : nul en mode etage 1 seul.
 
 Le demarrage est **cascade** : V_inter est etablie et stabilisee avant que
 l'etage 2 ne demarre, pour qu'il parte d'une tension d'entree connue.
@@ -88,10 +112,27 @@ l'etage 2 ne demarre, pour qu'il parte d'une tension d'entree connue.
 | `7` | Survoltage sortie (> 520 V) |
 | `8` | Liaison ESP32 perdue (> 2 s sans trame `$C` valide) |
 
-**Priorite quand plusieurs defauts coexistent : 2 > 3 > 4 > 5 > 1.**
-EMUSTOP a donc la priorite la plus BASSE malgre son numero : en
-developpement il se declenche a chaque halte du debogueur et ne doit
-jamais masquer une surintensite reelle.
+**Priorite quand plusieurs defauts coexistent :**
+
+```
+2 > 3 > 6 > 7 > 4 > 5 > 8 > 1
+```
+
+Les survoltages (6, 7) passent **avant** les surtemperatures, et EMUSTOP a
+la priorite la plus BASSE malgre son numero : en developpement il se
+declenche a chaque halte du debogueur et ne doit jamais masquer une
+surintensite reelle. `8` prime sur `1`.
+
+### Defauts verrouilles et defauts transitoires
+
+| Codes | Nature | Effet |
+|---|---|---|
+| `2` a `7` | **verrouilles** | Coupure definitive, cycle d'alimentation requis |
+| `1`, `8` | transitoires | Se relevent seuls |
+
+Un superviseur qui interromprait une campagne de mesure sur **n'importe
+quel** `FAULT != 0` s'arreterait a tort sur un simple hoquet de liaison.
+Seuls les codes `2` a `7` sont des arrets definitifs.
 
 **Il n'existe volontairement pas de code "court-circuit".** Un
 court-circuit franchit le meme comparateur et le meme seuil qu'une
@@ -199,7 +240,7 @@ $C,RUN=1,V1SET=35.0,VOSET=400.0,HT=1*XX
 |---|---|---|
 | `RUN` | 0 ou 1 | Demande de marche. A 0, retour immediat a l'arret |
 | `V1SET` | **15 a 50** | Consigne V_inter, en volts |
-| `VOSET` | **200 a 500** | Consigne sortie HT, en volts |
+| `VOSET` | **200 a 500**, ou **0** | Consigne sortie HT en volts ; `0` desactive l'etage 2 |
 | `HT` | 0 ou 1 | Sortie HT. N'a d'effet qu'en `STATE=4` |
 | `PWM1`, `PWM2` | 0 ou 1 | **Historiques**, acceptes mais sans effet |
 
@@ -210,6 +251,35 @@ rafraichit pas le timeout de liaison.
 
 L'ESP32 envoie cette trame toutes les **500 ms**, et immediatement a chaque
 changement depuis l'IHM.
+
+#### `VOSET=0` : mode etage 1 seul
+
+`VOSET` **exactement nul** n'est pas une consigne de 0 V, c'est la
+convention qui **desactive l'etage 2** :
+
+- la machine s'arrete a `STATE=4` des que l'etage 1 est etabli, sans jamais
+  passer par `2` ni `3` ;
+- le rapport cyclique de l'etage 2 est force a zero a chaque pas, sa sortie
+  ePWM est inhibee et sa porte ET n'est pas armee ;
+- **`HT=1` reste sans effet** : il n'y a pas de sortie HT a mettre sous
+  tension. `VOSP` renvoie `0.0`.
+
+Ce mode existe parce que sans lui la machine resterait bloquee
+indefiniment en `STATE=3`, l'integrateur sature a 95 % : une sortie ne peut
+pas atteindre 200 V quand le MOSFET, la diode et l'inductance de l'etage 2
+ne sont pas montes. C'est l'etat **par defaut au demarrage** du TMS320.
+
+Zero est sans ambiguite : ce n'est pas une consigne plausible, et toute
+valeur strictement comprise entre 0 et 200 reste refusee comme avant. Une
+valeur negative est refusee elle aussi.
+
+**Basculer entre les deux modes exige `RUN=0` d'abord.** Une trame qui
+activerait ou desactiverait l'etage 2 alors que la machine tourne est
+**refusee** (`REJ` s'incremente) : l'activer en marche ferait demarrer
+l'etage 2 avec un integrateur et une rampe hors contexte, donc par un
+a-coup de rapport cyclique ; le desactiver couperait la sortie sans passer
+par l'etat sur. La sequence correcte est `RUN=0`, puis le nouveau `VOSET`,
+puis `RUN=1`.
 
 #### Consigne hors bornes : refusee, jamais saturee
 
