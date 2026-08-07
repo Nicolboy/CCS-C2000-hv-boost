@@ -57,8 +57,6 @@ void pwm_init(void)
     // ensemble, pour que les deux etages demarrent leur compteur en phase.
     SysCtrlRegs.PCLKCR0.bit.TBCLKSYNC = 0;
 
-    GpioCtrlRegs.GPAMUX1.bit.GPIO0 = 1; // EPWM1A
-    GpioCtrlRegs.GPAMUX1.bit.GPIO2 = 1; // EPWM2A
     EDIS;
 
     s_stage[0].freq_hz = PWM_STAGE1_FREQ_HZ;
@@ -94,6 +92,29 @@ void pwm_init(void)
             p->AQCTLA.bit.ZRO = AQ_SET;
             p->AQCTLA.bit.CAU = AQ_CLEAR;
 
+            // INVERSION DE POLARITE DE SORTIE (driver UCC27517 inverseur :
+            // IN bas -> OUT haut -> MOSFET passant). On inverse via le
+            // sous-module Dead-Band, qui porte le seul vrai bit de polarite
+            // de l'ePWM, plutot qu'en retournant l'Action Qualifier.
+            //
+            // C'est ce placement dans la chaine qui compte. L'ordre des
+            // sous-modules est AQ -> DB -> chopper -> TZ -> broche :
+            //  - AQCSFRC (dans l'AQ) est EN AMONT : son forcage a l'etat bas
+            //    ressort haut sur la broche, donc MOSFET bloque. Inchange.
+            //  - TZCTL est EN AVAL : TZ_FORCE_LO mettrait la broche a l'etat
+            //    bas, donc le MOSFET PASSANT sur defaut. Bascule en
+            //    TZ_FORCE_HI dans safety.c -- indissociable de cette ligne.
+            //
+            // DB_ACTV_LO inverse les deux sorties. EPWMxB n'etant pas route
+            // sur une broche, inverser les deux est sans effet de bord et
+            // leve toute ambiguite sur celui des codes qui vise la voie A :
+            // se tromper mettrait le MOSFET passant en permanence.
+            p->DBRED = 0U; // aucun temps mort : un seul interrupteur par etage
+            p->DBFED = 0U;
+            p->DBCTL.bit.IN_MODE = DBA_ALL;
+            p->DBCTL.bit.POLSEL = DB_ACTV_LO;
+            p->DBCTL.bit.OUT_MODE = DB_FULL_ENABLE; // POLSEL sans effet si bypass
+
             s_stage[i].duty = 0.0f;
             s_stage[i].enabled = false;
 
@@ -102,7 +123,18 @@ void pwm_init(void)
         }
     }
 
+    // Les broches ne sont confiees a l'ePWM qu'ICI, la configuration faite et
+    // les sorties deja forcees a l'etat bloque par pwm_enable(s, false).
+    //
+    // Auparavant le multiplexage etait fait en tete de fonction : avec un
+    // driver inverseur, la broche pilotee par un ePWM encore vierge (Action
+    // Qualifier a zero, donc sortie basse) aurait rendu le MOSFET PASSANT
+    // pendant toute la configuration. Jusqu'au multiplexage la broche reste
+    // une entree GPIO avec son pull-up de reset, soit l'etat bloque.
     EALLOW;
+    GpioCtrlRegs.GPAMUX1.bit.GPIO0 = 1; // EPWM1A
+    GpioCtrlRegs.GPAMUX1.bit.GPIO2 = 1; // EPWM2A
+
     SysCtrlRegs.PCLKCR0.bit.TBCLKSYNC = 1;
     EDIS;
 }

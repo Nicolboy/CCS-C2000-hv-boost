@@ -47,11 +47,18 @@ void safety_init(void)
     Comp2Regs.DACVAL.bit.DACVAL = SAFETY_DAC_CODE_STAGE2;
     GpioCtrlRegs.GPAMUX1.bit.GPIO3 = 3; // COMP2OUT
 
+    // TZ_FORCE_HI et non LO : le driver de grille est INVERSEUR (voir la
+    // configuration DBCTL.POLSEL dans pwm.c). La Trip Zone agit en aval de
+    // cette inversion, directement sur la broche -- forcer l'etat bas y
+    // rendrait le MOSFET PASSANT sur defaut, transformant la protection en
+    // court-circuit franc. Les deux reglages sont indissociables : changer
+    // la polarite du driver impose de revoir cette ligne.
+    //
     // Digital Compare : COMPxOUT -> DCAEVT1 -> Trip Zone one-shot (latche)
     EPwm1Regs.DCTRIPSEL.bit.DCAHCOMPSEL = DC_COMP1OUT;
     EPwm1Regs.TZDCSEL.bit.DCAEVT1 = TZ_DCAH_LOW;
     EPwm1Regs.TZSEL.bit.DCAEVT1 = 1;
-    EPwm1Regs.TZCTL.bit.TZA = TZ_FORCE_LO;
+    EPwm1Regs.TZCTL.bit.TZA = TZ_FORCE_HI;
     EPwm1Regs.TZEINT.bit.OST = 1;
     // TZ6 = EMUSTOP (signal cable en dur depuis le CPU, TRM SPRUI09A section
     // 3.2.7) : coupe le PWM des que le debugger arrete le coeur. FREE_SOFT
@@ -63,7 +70,7 @@ void safety_init(void)
     EPwm2Regs.DCTRIPSEL.bit.DCAHCOMPSEL = DC_COMP2OUT;
     EPwm2Regs.TZDCSEL.bit.DCAEVT1 = TZ_DCAH_LOW;
     EPwm2Regs.TZSEL.bit.DCAEVT1 = 1;
-    EPwm2Regs.TZCTL.bit.TZA = TZ_FORCE_LO;
+    EPwm2Regs.TZCTL.bit.TZA = TZ_FORCE_HI;
     EPwm2Regs.TZEINT.bit.OST = 1;
     EPwm2Regs.TZSEL.bit.OSHT6 = 1;
     EPwm2Regs.TBCTL.bit.FREE_SOFT = 0;
@@ -99,12 +106,12 @@ void safety_arm_emustop_only(void)
     // TZ6 = EMUSTOP, cable en dur depuis le CPU (TRM SPRUI09A section 3.2.7).
     // One-shot : le flag latche, il ne se rearme pas seul.
     EPwm1Regs.TZSEL.bit.OSHT6 = 1;
-    EPwm1Regs.TZCTL.bit.TZA = TZ_FORCE_LO;
+    EPwm1Regs.TZCTL.bit.TZA = TZ_FORCE_HI;
     EPwm1Regs.TZEINT.bit.OST = 1;
     EPwm1Regs.TBCTL.bit.FREE_SOFT = 0;
 
     EPwm2Regs.TZSEL.bit.OSHT6 = 1;
-    EPwm2Regs.TZCTL.bit.TZA = TZ_FORCE_LO;
+    EPwm2Regs.TZCTL.bit.TZA = TZ_FORCE_HI;
     EPwm2Regs.TZEINT.bit.OST = 1;
     EPwm2Regs.TBCTL.bit.FREE_SOFT = 0;
 

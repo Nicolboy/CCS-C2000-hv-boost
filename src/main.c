@@ -75,6 +75,15 @@ static void update_overtemp(void)
 //
 // Ordre impose : la decharge est inhibee AVANT d'autoriser les etages,
 // sinon la conversion travaillerait contre le circuit de decharge.
+// Chemin de puissance deja arme ? enable_power_path() est appelee a CHAQUE
+// tour de boucle tant que RUN est vrai, alors que la mise a zero du duty
+// qu'elle contient ne vaut qu'a l'armement. Sans ce garde-fou, la boucle
+// principale ecrase en permanence le duty calcule par control.c, qui ne le
+// releve qu'au tick de regulation decime : le PWM sort alors par salves
+// separees de longs trous (observe au scope). Remis a false par
+// enter_safe_state(), seul chemin de retour au repos.
+static bool s_power_path_armed = false;
+
 static void enable_power_path(void)
 {
     // Etage 2 desactive (consigne de sortie nulle) : sa porte ET reste
@@ -85,8 +94,15 @@ static void enable_power_path(void)
 
     hv_discharge_set(false);
 
-    pwm_set_duty(STAGE_1, 0.0f);
-    pwm_set_duty(STAGE_2, 0.0f);
+    // Uniquement a l'armement : demarrer a duty nul est voulu (control.c
+    // rampe ensuite depuis la tension mesuree), le maintenir a zero ne
+    // l'est pas.
+    if (!s_power_path_armed)
+    {
+        pwm_set_duty(STAGE_1, 0.0f);
+        pwm_set_duty(STAGE_2, 0.0f);
+        s_power_path_armed = true;
+    }
 
     pwm_enable(STAGE_1, true);
     pwm_enable(STAGE_2, s2);
@@ -148,6 +164,9 @@ static fault_code_t compute_fault_code(const safety_faults_t *f)
 // reellement la charge (PROMPT §6 etape 6).
 static void enter_safe_state(void)
 {
+    // Le prochain enable_power_path() devra re-armer, donc repartir de zero.
+    s_power_path_armed = false;
+
     control_set_run(false);
     pwm_enable(STAGE_1, false);
     pwm_enable(STAGE_2, false);
@@ -330,6 +349,10 @@ void main(void)
             // ligne en cours est tronquee.
             uart_link_restart();
             safety_clear_faults();
+
+            // Desarmer avant de re-armer : la reprise apres EMUSTOP est une
+            // sequence de demarrage complete, donc duty repart de zero.
+            s_power_path_armed = false;
             enable_power_path();
         }
         else if (g_last_cmd.run)
