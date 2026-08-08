@@ -252,10 +252,44 @@ crête à 30 ns**, en abaissant `DACVAL` par paliers, convertisseur stable à
 | 250 | 0,806 V | **déclenche** |
 
 Le sommet visible de la rampe ne dépasse pas 0,50 V. Le comparateur voit donc
-une excursion entre 0,81 et 0,97 V, soit **0,35 V de dépassement** qu'un
-échantillonnage à 7,7 MHz ne résout pas. Le recoupement à 45 V donne 1,04 V de
-dépassement pour un sommet visible de 0,85 V : le parasite grandit environ
-trois fois quand le courant double.
+une excursion entre 0,81 et 0,97 V, soit **0,35 V de dépassement** invisible
+sur les captures.
+
+**Pourquoi elle était invisible.** Non pas par manque de bande passante —
+l'Analog Discovery monte à 30 MHz — mais par **longueur d'enregistrement**. Le
+tampon fait 8192 points : sur une fenêtre de 1 ms, la cadence tombe à
+8,2 MHz, soit un point toutes les 122 ns. Une impulsion de quelques dizaines
+de nanosecondes passe entre deux échantillons. S'y ajoutent le mode de
+décimation, qui doit être en crête ou min/max pour conserver les événements
+brefs, et la masse de la sonde, dont le fil crocodile limite la bande utile à
+quelques mégahertz quel que soit le calibre annoncé.
+
+**Pointe finalement capturée** à 100 MS/s, 200 ns/div, ressort de masse court,
+au point de fonctionnement 10 V / 50 V / 1,296 A :
+
+| | Valeur |
+|---|---|
+| Sommet utile de la rampe | ~1,22 V |
+| **Pointe** | **1,619 V** |
+| Largeur | **~25 ns** |
+| Seuil de déclenchement | 1,893 V |
+| Marge sans qualification | 0,27 V, soit 14 % |
+
+La fenêtre de qualification exige 533 ns contre 25 ns de pointe : **un facteur
+20**, la marge est donc très large. Et à 14 % du seuil à 50 V, la pointe aurait
+franchi celui-ci en chargeant davantage — la qualification n'est pas un
+confort, c'est ce qui rend la plage de fonctionnement accessible.
+
+Un détail confirme le mécanisme : après la pointe le signal ne retombe pas à
+zéro comme le ferait un shunt de source au blocage, il décroît lentement, avec
+la constante de temps de l'amplificateur (~127 kHz au gain 31,5, soit 1,25 µs).
+Un ampli aussi lent ne peut pas *amplifier* une impulsion de 25 ns : elle
+arrive sur sa sortie par un autre chemin — couplage capacitif, ou réjection
+d'alimentation médiocre en haute fréquence. D'où son invisibilité dans le
+signal utile et sa parfaite visibilité pour un comparateur à 30 ns.
+
+Le recoupement à 45 V donnait 1,04 V de dépassement pour un sommet visible de
+0,85 V : le parasite grandit environ trois fois quand le courant double.
 
 **Correction.** `SYNCSEL = 1` et `QUALSEL = 31` sur les deux comparateurs. La
 bascule exige 32 échantillons SYSCLK consécutifs au-dessus du seuil.
