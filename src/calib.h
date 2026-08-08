@@ -28,15 +28,31 @@
 // VIN et V1 tombent sur les valeurs theoriques ; VOUT s'en ecarte de
 // 1,8 % (tolerance des resistances), sans consequence : la pleine
 // echelle reelle (600 V) reste au-dessus des 400 V vises.
-#define MEAS_VIN_GAIN_V_PER_V    11.11f   // broche 10, coef mesure 0,09
-#define MEAS_V1_GAIN_V_PER_V     31.25f   // broche 16, coef mesure 0,032
+// RECALES en charge, convertisseur en regulation a 35 V sur 220 ohms, avec
+// deux points d'entree (9,94 V / 620 mA et 15,07 V / 416 mA) references au
+// voltmetre et a l'amperemetre. Valables SEULEMENT depuis l'ajout des RC
+// 1 kOhm + 10 nF sur les sorties des suiveurs : avant, la reinjection de
+// charge de l'ADC faisait lire V1 jusqu'a 16 % trop haut, de facon bimodale.
+// Tout etalonnage anterieur a ce filtre est a jeter.
+#define MEAS_VIN_GAIN_V_PER_V    11.00f   // broche 10, coef mesure 0,09
+#define MEAS_V1_GAIN_V_PER_V     31.32f   // broche 16, coef mesure 0,032
 #define MEAS_VOUT_GAIN_V_PER_V   181.82f  // broche 14, coef mesure 0,0055
 
 // ---- Courant d'entree (doc §2) --------------------------------------
-// Un seul point mesure (250 mA -> 0,208 V) : la caracteristique est
-// SUPPOSEE passer par zero, offset non verifie. Un second point reste
-// a faire.
-#define MEAS_IIN_A_PER_V         1.2019f
+// Recale sur les deux memes points : 487 counts -> 620 mA et 335 -> 416 mA.
+// L'ancienne valeur de 1,2019 sous-estimait de 30 %, ce qui donnait des
+// rendements superieurs a 100 % -- c'est par la qu'on a trouve le probleme.
+//
+// Gain SEUL, offset suppose nul, et c'est un choix delibere : les deux
+// points impliqueraient un offset de 25 counts, soit 20 mV ramenes a la
+// broche. Le meme calcul donne 30 mV sur VIN, sept fois l'offset maximal
+// d'un MCP6001. Un tel ecart ne peut pas etre un offset d'amplificateur : le
+// modele a deux points capte donc autre chose (non-linearite, ou simplement
+// le bruit des references). Le figer reviendrait a graver une erreur de
+// mesure. Ecart residuel avec le gain seul : moins de 2 %.
+//
+// Un TROISIEME point, a courant nettement different, trancherait.
+#define MEAS_IIN_A_PER_V         1.568f
 
 // ---- Courant de sortie (doc §4) -------------------------------------
 // NON MESURE : valeur theorique de conception (3,0 V @ 50 mA).
@@ -107,6 +123,26 @@
 #define SAFETY_ISHUNT_THRESHOLD_A   3.0f
 #define SAFETY_DAC_VREF_V           3.3f
 
+// Qualification du comparateur : nombre d'echantillons SYSCLK consecutifs
+// au-dessus du seuil avant que la sortie ne bascule. 31 -> environ 530 ns.
+//
+// N'est PAS un confort : sans elle, la protection se declenchait sur des
+// pointes de commutation invisibles a l'oscilloscope. Mesure a l'appui --
+// en abaissant DACVAL par paliers, convertisseur a 35 V, le basculement
+// survient entre 0,81 et 0,97 V alors que le sommet de la rampe de courant
+// ne depasse pas 0,50 V. Le comparateur, qui repond en 30 ns, voit donc un
+// depassement de 0,35 V que 7,7 MHz d'echantillonnage ne resolvent pas. A
+// 45 V de sortie ce depassement atteint 1 V et franchit le seuil de service,
+// ce qui rendait toute montee en tension impossible.
+//
+// COUT : la detection d'une vraie surintensite est retardee d'autant. Sur un
+// defaut franc, di/dt = Vin/L = 10 V / 47 uH = 0,21 A/us, donc 530 ns
+// represente 0,11 A de depassement sur un seuil de 3 A. Negligeable.
+//
+// Exige SYNCSEL = 1 : la qualification ne porte que sur la sortie
+// SYNCHRONISEE du comparateur. En asynchrone, ce champ est sans effet.
+#define SAFETY_COMP_QUALSEL         31U
+
 #define SAFETY_DAC_CODE_FROM_V(v_) \
     ((uint16_t)((v_) / SAFETY_DAC_VREF_V * 1023.0f + 0.5f))
 
@@ -137,20 +173,39 @@
 #define ADC_VREF_V          3.3f
 
 // Fenetre d'echantillonnage : ACQPS + 1 cycles SYSCLK -- et non ADCCLK, la
-// distinction compte pour tout ce qui suit. A 60 MHz, 26 cycles = 433 ns,
-// confortable meme avec une source de quelques kilo-ohms (ponts diviseurs).
+// distinction compte pour tout ce qui suit. Duree totale d'une voie =
+// acquisition + 13 cycles ADCCLK de conversion (30 MHz, soit 433 ns), les
+// deux phases etant sequentielles a cause de ADCNONOVERLAP.
 //
-// Duree totale d'une voie : 433 ns d'acquisition + 13 cycles ADCCLK de
-// conversion (30 MHz, soit 433 ns aussi) = 866 ns, les deux phases etant
-// sequentielles a cause de ADCNONOVERLAP. Les 9 voies font donc 7,8 us.
-#define ADC_ACQPS_CYCLES    25
+// DEUX fenetres, parce que les sources n'ont rien de comparable.
+//
+// Voies TAMPONNEES (toutes sauf les thermistances) : un suiveur suivi d'un
+// RC 1 kOhm + 10 nF a la broche. Ce n'est plus l'ampli qui charge le
+// condensateur d'echantillonnage mais le condensateur local, avec une
+// constante de temps de quelques nanosecondes. 7 cycles suffisent donc
+// largement, et c'est CE raccourcissement qui rend possible le placement de
+// toutes les voies utiles dans la fenetre propre du cycle de decoupage.
+// 6 est le minimum autorise par le silicium.
+//
+// Voies THERMISTANCES : pas de suiveur, source haute impedance. Elles
+// gardent une fenetre longue. Elles sont lentes, leur position dans la
+// sequence n'a aucune importance.
+#define ADC_ACQPS_FAST      6    // 7 cycles = 117 ns -> 550 ns par voie
+#define ADC_ACQPS_SLOW      25   // 26 cycles = 433 ns -> 866 ns par voie
 
-// La meme fenetre, exprimee en counts de TBCLK pour placer CMPB. TBCLK =
-// SYSCLK ici (TB_DIV1 et HSPCLKDIV = 1), la conversion est donc directe.
+// Duree d'une voie rapide, en counts de TBCLK. TBCLK = SYSCLK ici (TB_DIV1
+// et HSPCLKDIV = 1), la conversion est donc directe : 550 ns = 33 counts.
+#define ADC_FAST_SLOT_COUNTS   33
+
+// Placement du declenchement, en counts avant le milieu de la conduction.
 //
-// L'ADC echantillonne a la FIN de la fenetre d'acquisition : pour viser un
-// instant donne, il faut declencher ce nombre de counts plus tot.
-#define ADC_ACQ_COUNTS      (ADC_ACQPS_CYCLES + 1)
+// Deux termes. D'abord la fenetre d'acquisition elle-meme : l'ADC
+// echantillonne a la FIN de celle-ci, il faut donc declencher d'autant plus
+// tot. Ensuite le CENTRAGE du groupe : les quatre voies critiques occupent
+// 4 creneaux, leurs instants d'echantillonnage s'etalent sur 3 creneaux, et
+// c'est le MILIEU de cet etalement qu'on veut au milieu de la conduction --
+// pas la premiere voie, sinon les trois autres derivent vers le blocage.
+#define ADC_TRIG_LEAD_COUNTS   ((ADC_ACQPS_FAST + 1) + ((3 * ADC_FAST_SLOT_COUNTS) / 2))
 
 // =====================================================================
 // Regulation et bornes d'exploitation

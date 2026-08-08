@@ -109,6 +109,39 @@ est appliqué** — c'est exactement le cas de figure qui rend un
 dysfonctionnement indéchiffrable. Le comparer à `V1SP`/`VOSP` permet de
 savoir laquelle des consignes a été refusée.
 
+### À implémenter : réglage de `V1SET` depuis l'IHM
+
+L'interface n'expose aujourd'hui **aucun réglage de consigne** : `V1SET` est
+figé à 35,0 V dans le firmware. C'est le principal manque fonctionnel côté
+ESP32, et il bloque la caractérisation de l'alimentation — impossible de
+tracer une courbe de régulation ou de rendement en fonction de la tension
+intermédiaire sans pouvoir la faire varier.
+
+Ce qu'il faut, au minimum : un champ numérique ou un curseur pour `V1SET`,
+**dans la plage 15 à 50 V**, envoyé immédiatement à la modification, comme
+les autres commandes.
+
+Trois règles à respecter.
+
+**Ne pas valider localement.** L'ESP32 relaie, il ne borne pas. Le TMS320 est
+la seule source de vérité sur les limites physiques et rejette lui-même une
+valeur hors plage. Dupliquer les bornes côté ESP32 garantit qu'elles
+divergeront un jour.
+
+**Afficher `V1SP` reçu en télémétrie à côté de la valeur demandée.** C'est le
+seul moyen de savoir ce qui est réellement appliqué. Si les deux diffèrent,
+la consigne a été refusée et `REJ` s'est incrémenté — voir la section sur
+`REJ` plus haut, qui reste à afficher elle aussi.
+
+**`V1SET` peut changer en marche, sans repasser par `RUN=0`.** La consigne
+est rampée côté TMS320, la montée est donc douce et la boucle reste fermée
+pendant toute la transition. Seule une bascule de l'étage 2, via `VOSET`,
+exige l'arrêt — c'est décrit dans la section suivante et ne concerne pas
+`V1SET`.
+
+Un réglage de `VOSET` suivra le jour où l'étage 2 sera monté ; inutile de
+l'exposer tant que la carte est en mode étage 1 seul.
+
 ### `VOSET=0` — mode étage 1 seul, **état actuel de la carte**
 
 C'est le point le plus important de cette révision pour l'ESP32.

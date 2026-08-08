@@ -214,6 +214,17 @@ void control_set_run(bool run)
     s_run_requested = run;
 }
 
+void control_restart(void)
+{
+    // La course avec l'ISR est benigne et voulue : si elle s'intercale entre
+    // ces deux lignes, elle traite l'etat IDLE, repart de la tension mesuree
+    // avec un accumulateur nul, et le both_off() qui suit ne fait que remettre
+    // a zero ce qui l'est deja. Aucun etat incoherent n'est atteignable, donc
+    // pas besoin de masquer les interruptions.
+    s_state = CTRL_STATE_IDLE;
+    both_off();
+}
+
 void control_trip(void)
 {
     s_trip_requested = true;

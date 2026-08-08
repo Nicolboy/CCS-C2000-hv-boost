@@ -30,9 +30,12 @@ void safety_init(void)
     // seuil DAC sur l'entree inverseuse (COMPSOURCE=0).
     Comp1Regs.COMPCTL.bit.COMPDACEN = 1;
     Comp1Regs.COMPCTL.bit.COMPSOURCE = 0;
-    Comp1Regs.COMPCTL.bit.SYNCSEL = 0;  // asynchrone -> ~30 ns vers le Trip Zone
+    // SYNCSEL = 1 et non 0 : la qualification ci-dessous ne s'applique qu'a la
+    // sortie SYNCHRONISEE. En asynchrone (30 ns de latence) QUALSEL est sans
+    // effet, et la moindre pointe de commutation fait basculer la protection.
+    Comp1Regs.COMPCTL.bit.SYNCSEL = 1;
     Comp1Regs.COMPCTL.bit.CMPINV = 1;   // driver actif haut : 1=OK, 0=defaut
-    Comp1Regs.COMPCTL.bit.QUALSEL = 0;  // pas de qualification pour l'instant
+    Comp1Regs.COMPCTL.bit.QUALSEL = SAFETY_COMP_QUALSEL;
     // Seuil propre a l'etage 1 : les deux chaines de mesure different d'environ
     // 1 % en gain et n'ont pas le meme offset (docs/mesure-cartepuissance.md).
     Comp1Regs.DACVAL.bit.DACVAL = SAFETY_DAC_CODE_STAGE1;
@@ -41,9 +44,9 @@ void safety_init(void)
     // Comparateur 2 : idem, shunt etage 2 sur COMP2A.
     Comp2Regs.COMPCTL.bit.COMPDACEN = 1;
     Comp2Regs.COMPCTL.bit.COMPSOURCE = 0;
-    Comp2Regs.COMPCTL.bit.SYNCSEL = 0;
+    Comp2Regs.COMPCTL.bit.SYNCSEL = 1;
     Comp2Regs.COMPCTL.bit.CMPINV = 1;
-    Comp2Regs.COMPCTL.bit.QUALSEL = 0;
+    Comp2Regs.COMPCTL.bit.QUALSEL = SAFETY_COMP_QUALSEL;
     Comp2Regs.DACVAL.bit.DACVAL = SAFETY_DAC_CODE_STAGE2;
     GpioCtrlRegs.GPAMUX1.bit.GPIO3 = 3; // COMP2OUT
 

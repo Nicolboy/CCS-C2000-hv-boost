@@ -36,6 +36,22 @@ bool control_set_setpoints(float v1_set_v, float vout_set_v);
 // Demande de marche. A false, retour immediat a l'arret.
 void control_set_run(bool run);
 
+// Reprise apres EMUSTOP : ramene la machine d'etat au repos et vide
+// l'integrateur, de sorte que la conversion reparte par la sequence de
+// demarrage complete et non la ou elle s'etait arretee.
+//
+// Indispensable, et pas seulement pour la proprete : pendant la halte du
+// coeur la sortie se vide dans la charge, alors que l'integrateur conserve
+// le duty d'avant. Le reappliquer tel quel sur une sortie effondree emballe
+// le courant d'inductance -- la desaimantation pendant le temps bloque,
+// proportionnelle a (V1 - Vin), devient quasi nulle alors que la
+// magnetisation reste entiere.
+//
+// A appeler depuis la boucle principale. control_set_run(false) ne
+// conviendrait PAS : ce drapeau n'est relu qu'au prochain pas de regulation,
+// et la boucle principale le repasserait a true avant que l'ISR ne l'ait vu.
+void control_restart(void);
+
 // Passage en defaut verrouille : les sorties sont coupees et plus rien ne
 // redemarre sans repasser par control_init() ou un cycle d'alimentation.
 void control_trip(void);

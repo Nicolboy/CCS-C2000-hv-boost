@@ -6,15 +6,15 @@
 // Valeurs du champ CHSEL (TRM SPRUI09A) : groupe A = 0x0..0x7,
 // groupe B = 0x8..0xF. L'ordre suit adc_channel_t / SOC0..SOC8.
 static const uint16_t k_chsel[ADC_CH_COUNT] = {
-    0x2, // ADCINA2 - I1 (shunt etage 1) -- en tete, cf. adc.h
-    0x0, // ADCINA0 - VIN
-    0x1, // ADCINA1 - IIN
+    0x2, // ADCINA2 - I1   (shunt etage 1)  \ groupe critique, en tete de
+    0xC, // ADCINB4 - V1                    | sequence et fenetre courte,
+    0x0, // ADCINA0 - VIN                   | cf. adc.h
+    0x1, // ADCINA1 - IIN                   /
     0x3, // ADCINA3 - IOUT
-    0x4, // ADCINA4 - I2 (shunt etage 2)
+    0x4, // ADCINA4 - I2   (shunt etage 2)
     0xA, // ADCINB2 - VOUT
-    0xC, // ADCINB4 - V1
-    0xE, // ADCINB6 - T1
-    0xF  // ADCINB7 - T2
+    0xE, // ADCINB6 - T1   (non tamponnee, fenetre longue)
+    0xF  // ADCINB7 - T2   (non tamponnee, fenetre longue)
 };
 
 static volatile uint16_t s_raw[ADC_CH_COUNT];
@@ -63,10 +63,20 @@ void adc_init(void)
         volatile union ADCSOCxCTL_REG *soc = (&AdcRegs.ADCSOC0CTL) + i;
 
         soc->bit.CHSEL = k_chsel[i];
-        soc->bit.TRIGSEL = 5U;             // ePWM1 SOCA
-        soc->bit.ACQPS = ADC_ACQPS_CYCLES; // fenetre S/H
+        soc->bit.TRIGSEL = 5U; // ePWM1 SOCA
+
+        // Fenetre courte sur les voies tamponnees, longue sur les deux
+        // thermistances qui n'ont pas de suiveur. Chaque SOC porte son
+        // propre ACQPS, il n'y a donc rien a sacrifier a l'autre.
+        soc->bit.ACQPS = (i < (uint16_t)(ADC_CH_COUNT - 2U))
+                             ? (uint16_t)ADC_ACQPS_FAST
+                             : (uint16_t)ADC_ACQPS_SLOW;
     }
 
+    // Duree de la sequence : 7 voies rapides a 550 ns et 2 lentes a 866 ns,
+    // soit 5,58 us. Elle tient donc dans une periode de decoupage, la ou les
+    // 7,8 us d'avant en debordaient largement.
+    //
     // ADCINT1 declenchee par la fin du dernier SOC de la sequence.
     AdcRegs.INTSEL1N2.bit.INT1SEL = (uint16_t)ADC_CH_COUNT - 1U;
     AdcRegs.INTSEL1N2.bit.INT1CONT = 0;

@@ -35,24 +35,30 @@ static uint16_t stage_index(stage_id_t stage)
     return (stage == STAGE_1) ? 0U : 1U;
 }
 
-// Place CMPB au milieu de la conduction du MOSFET, pour y declencher la
-// sequence ADC (voir adc.c). La conduction va de CTR=0 a CMPA : son milieu
-// est CMPA>>1. L'ADC echantillonnant a la FIN de sa fenetre d'acquisition,
-// on declenche ADC_ACQ_COUNTS plus tot.
+// Place CMPB de sorte que le GROUPE des quatre voies critiques de l'ADC soit
+// centre sur le milieu de la conduction du MOSFET (voir adc.c et adc.h).
+//
+// La conduction va de CTR=0 a CMPA : son milieu est CMPA>>1. On declenche
+// ADC_TRIG_LEAD_COUNTS plus tot, ce qui couvre deux choses -- la fenetre
+// d'acquisition, puisque l'ADC echantillonne a sa FIN, et le demi-etalement
+// du groupe, pour que ce soit son milieu et non sa premiere voie qui tombe au
+// bon endroit. Sans ce second terme les trois dernieres voies deriveraient
+// vers le blocage, ce qui est exactement ce qu'on cherche a eviter.
 //
 // Uniquement un decalage, une soustraction et une comparaison : appelable
 // depuis l'ISR ADC sans enfreindre la regle "ni multiplication ni division".
+// ADC_TRIG_LEAD_COUNTS est une constante evaluee a la compilation.
 //
-// A duty faible la fenetre ne tient pas dans la conduction et la mesure est
-// moins bien centree. C'est sans enjeu : a ce niveau le courant est petit, et
-// la protection contre les surintensites ne depend pas de l'ADC -- elle passe
-// par les comparateurs analogiques, en continu.
+// A duty faible le groupe deborde sur le blocage -- limite structurelle
+// documentee dans adc.h, pas un defaut de reglage. La protection contre les
+// surintensites n'en depend pas : elle passe par les comparateurs
+// analogiques, en continu.
 static void pwm_apply_adc_trigger(volatile struct EPWM_REGS *p)
 {
     uint16_t mid = (uint16_t)(p->CMPA.half.CMPA >> 1);
 
-    p->CMPB = (mid > (uint16_t)ADC_ACQ_COUNTS)
-                  ? (uint16_t)(mid - (uint16_t)ADC_ACQ_COUNTS)
+    p->CMPB = (mid > (uint16_t)ADC_TRIG_LEAD_COUNTS)
+                  ? (uint16_t)(mid - (uint16_t)ADC_TRIG_LEAD_COUNTS)
                   : 1U;
 }
 

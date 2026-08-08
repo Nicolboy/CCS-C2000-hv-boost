@@ -353,6 +353,15 @@ void main(void)
             // Desarmer avant de re-armer : la reprise apres EMUSTOP est une
             // sequence de demarrage complete, donc duty repart de zero.
             s_power_path_armed = false;
+
+            // Et la machine d'etat AVEC. Remettre CMPA a zero ne suffit pas :
+            // l'integrateur de control.c conserve sinon le duty d'avant la
+            // halte et le reimpose des le pas de regulation suivant, sur une
+            // sortie qui s'est videe dans la charge pendant l'arret. Le
+            // courant d'inductance s'emballe alors en quelques periodes et la
+            // protection coupe -- constate en debogage a 10 V d'entree, ou le
+            // duty eleve rend le phenomene le plus violent.
+            control_restart();
             enable_power_path();
         }
         else if (g_last_cmd.run)
