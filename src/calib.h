@@ -74,6 +74,25 @@
 // ZXCT1109, 3 uA typiques soit 2,7 % a 1,4 A. Environ +/-6 % au total.
 #define MEAS_IIN_A_PER_V         1.202f
 
+// EVOLUTION PREVUE : INA293A2 (gain 50) alimente en 3,3 V, shunt 0,01 ohm.
+// Basculer sur 2,000f LE JOUR OU la carte est modifiee, pas avant.
+//
+//   Vadc = 50 x 0,01 x I = 0,5 V/A   ->   I = Vadc x 2,000
+//
+// Gagnant sur les deux tableaux face au ZXCT1109 : l'offset d'entree de
+// quelques dizaines de microvolts vaut ~1,5 mA ramene au courant (contre
+// ~37 mA pour le courant d'offset de 3 uA du ZXCT1109 sur 0,02 ohm), et le
+// shunt deux fois plus petit dissipe deux fois moins -- 20 mW a 1,42 A.
+//
+// Pleine echelle 6,6 A, environ 6,4 A utiles (la sortie ne monte pas tout a
+// fait au rail). Resolution 1,6 mA par LSB, soit l'ordre de grandeur de
+// l'offset : inutile de chercher plus fin.
+//
+// ATTENTION : contrairement au ZXCT1109 qui se nourrit de la ligne mesuree,
+// l'INA293 exige une alimentation separee de 2,7 a 5,5 V. Le rail 3,3 V doit
+// donc lui parvenir -- et etre protege (TVS 3,6 V).
+// #define MEAS_IIN_A_PER_V      2.000f
+
 // ---- Courant de sortie (doc §4) -------------------------------------
 // NON MESURE : valeur theorique de conception (3,0 V @ 50 mA).
 // A remplacer des qu'une mesure reelle sera disponible.
