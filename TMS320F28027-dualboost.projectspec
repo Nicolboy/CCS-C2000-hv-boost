@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<projectSpec>
+  <project
+        name="TMS320F28027-dualboost"
+        device="TMS320F28027"
+        connection="TIXDS100v3_Dot7_Connection.xml"
+        outputType="executable"
+        launchWizard="False"
+        linkerCommandFile=""
+        compilerBuildOptions="
+            -v28 -ml -mt -O2
+            --include_path=&quot;${CG_TOOL_ROOT}/include&quot;
+            --include_path=&quot;C:/ti/C2000Ware_26_01_00_00/device_support/f2802x/headers/include&quot;
+            --include_path=&quot;C:/ti/C2000Ware_26_01_00_00/device_support/f2802x&quot;
+            --include_path=&quot;C:/ti/C2000Ware_26_01_00_00/device_support/f2802x/common/include&quot;
+            --define=_DEBUG --define=LARGE_MODEL --define=_FLASH
+            -g --diag_suppress=232 --diag_suppress=10063 --diag_warning=225
+            --issue_remarks --verbose_diagnostics --quiet --abi=coffabi"
+        linkerBuildOptions="
+            --stack_size=0x400 --warn_sections
+            -i&quot;${CG_TOOL_ROOT}/lib&quot;
+            -i&quot;${CG_TOOL_ROOT}/include&quot;
+            --entry_point=code_start --rom_model
+            -lrts2800_ml.lib"
+    >
+
+    <!-- Sources du convertisseur -->
+    <file action="copy" path="C:/Users/Nicolas/workspace_ccstheia/dualboost-old/src/adc.c" targetDirectory="src" />
+    <file action="copy" path="C:/Users/Nicolas/workspace_ccstheia/dualboost-old/src/adc.h" targetDirectory="src" />
+    <file action="copy" path="C:/Users/Nicolas/workspace_ccstheia/dualboost-old/src/bsp_clock.c" targetDirectory="src" />
+    <file action="copy" path="C:/Users/Nicolas/workspace_ccstheia/dualboost-old/src/bsp_clock.h" targetDirectory="src" />
+    <file action="copy" path="C:/Users/Nicolas/workspace_ccstheia/dualboost-old/src/bsp_gpio.c" targetDirectory="src" />
+    <file action="copy" path="C:/Users/Nicolas/workspace_ccstheia/dualboost-old/src/bsp_gpio.h" targetDirectory="src" />
+    <file action="copy" path="C:/Users/Nicolas/workspace_ccstheia/dualboost-old/src/calib.h" targetDirectory="src" />
+    <file action="copy" path="C:/Users/Nicolas/workspace_ccstheia/dualboost-old/src/control.c" targetDirectory="src" />
+    <file action="copy" path="C:/Users/Nicolas/workspace_ccstheia/dualboost-old/src/control.h" targetDirectory="src" />
+    <file action="copy" path="C:/Users/Nicolas/workspace_ccstheia/dualboost-old/src/main.c" targetDirectory="src" />
+    <file action="copy" path="C:/Users/Nicolas/workspace_ccstheia/dualboost-old/src/measure.c" targetDirectory="src" />
+    <file action="copy" path="C:/Users/Nicolas/workspace_ccstheia/dualboost-old/src/measure.h" targetDirectory="src" />
+    <file action="copy" path="C:/Users/Nicolas/workspace_ccstheia/dualboost-old/src/protocol.h" targetDirectory="src" />
+    <file action="copy" path="C:/Users/Nicolas/workspace_ccstheia/dualboost-old/src/pwm.c" targetDirectory="src" />
+    <file action="copy" path="C:/Users/Nicolas/workspace_ccstheia/dualboost-old/src/pwm.h" targetDirectory="src" />
+    <file action="copy" path="C:/Users/Nicolas/workspace_ccstheia/dualboost-old/src/safety.c" targetDirectory="src" />
+    <file action="copy" path="C:/Users/Nicolas/workspace_ccstheia/dualboost-old/src/safety.h" targetDirectory="src" />
+    <file action="copy" path="C:/Users/Nicolas/workspace_ccstheia/dualboost-old/src/status_led.c" targetDirectory="src" />
+    <file action="copy" path="C:/Users/Nicolas/workspace_ccstheia/dualboost-old/src/status_led.h" targetDirectory="src" />
+    <file action="copy" path="C:/Users/Nicolas/workspace_ccstheia/dualboost-old/src/uart_link.c" targetDirectory="src" />
+    <file action="copy" path="C:/Users/Nicolas/workspace_ccstheia/dualboost-old/src/uart_link.h" targetDirectory="src" />
+
+    <!-- Fichier de commande de l'editeur de liens, propre au projet -->
+    <file action="copy" path="C:/Users/Nicolas/workspace_ccstheia/dualboost-old/F2802x_generic_flash.cmd" targetDirectory="" />
+
+    <!-- Support device C2000Ware : COPIE et non lie, pour que le projet reste
+         autonome et survive a un deplacement ou a une duplication. -->
+    <file action="copy" path="C:/ti/C2000Ware_26_01_00_00/device_support/f2802x/headers/source/F2802x_GlobalVariableDefs.c" targetDirectory="" />
+    <file action="copy" path="C:/ti/C2000Ware_26_01_00_00/device_support/f2802x/headers/cmd/F2802x_Headers_nonBIOS.cmd" targetDirectory="" />
+    <file action="copy" path="C:/ti/C2000Ware_26_01_00_00/device_support/f2802x/common/source/f2802x_codestartbranch.asm" targetDirectory="" />
+    <file action="copy" path="C:/ti/C2000Ware_26_01_00_00/device_support/f2802x/common/source/f2802x_cputimers.c" targetDirectory="" />
+    <file action="copy" path="C:/ti/C2000Ware_26_01_00_00/device_support/f2802x/common/source/f2802x_defaultisr.c" targetDirectory="" />
+    <file action="copy" path="C:/ti/C2000Ware_26_01_00_00/device_support/f2802x/common/source/f2802x_piectrl.c" targetDirectory="" />
+    <file action="copy" path="C:/ti/C2000Ware_26_01_00_00/device_support/f2802x/common/source/f2802x_pievect.c" targetDirectory="" />
+    <file action="copy" path="C:/ti/C2000Ware_26_01_00_00/device_support/f2802x/common/source/f2802x_sysctrl.c" targetDirectory="" />
+    <file action="copy" path="C:/ti/C2000Ware_26_01_00_00/device_support/f2802x/common/source/f2802x_usdelay.asm" targetDirectory="" />
+
+  </project>
+</projectSpec>
