@@ -34,7 +34,11 @@
 // 1 kOhm + 10 nF sur les sorties des suiveurs : avant, la reinjection de
 // charge de l'ADC faisait lire V1 jusqu'a 16 % trop haut, de facon bimodale.
 // Tout etalonnage anterieur a ce filtre est a jeter.
-#define MEAS_VIN_GAIN_V_PER_V    11.00f   // broche 10, coef mesure 0,09
+// VIN recale sur le multimetre : 17,50 V lus pour 17,15 V reels, mesures au
+// meme noeud (condensateur d'entree, la ou est pique le pont diviseur).
+// 11,00 x 17,15/17,50 = 10,78. UN SEUL point : l'offset n'est pas separe du
+// gain, a reprendre avec un second point a tension d'entree differente.
+#define MEAS_VIN_GAIN_V_PER_V    10.78f   // broche 10, coef mesure 0,09
 #define MEAS_V1_GAIN_V_PER_V     31.32f   // broche 16, coef mesure 0,032
 #define MEAS_VOUT_GAIN_V_PER_V   181.82f  // broche 14, coef mesure 0,0055
 
@@ -52,7 +56,23 @@
 // mesure. Ecart residuel avec le gain seul : moins de 2 %.
 //
 // Un TROISIEME point, a courant nettement different, trancherait.
-#define MEAS_IIN_A_PER_V         1.568f
+// CALCULEE, plus etalonnee. Tous les termes sont connus et verifies
+// independamment, il n'y a plus lieu d'ajuster empiriquement :
+//
+//   ZXCT1109 : Gt = 4 mA/V a +/-1,8 % (fiche DS35033, page 3)
+//   Rsense   : 0,0208 ohm, mesure au banc (27 mV releves a 1,30 A)
+//   Rgain    : 10 kOhm
+//
+//   Vadc = 0,004 x 0,0208 x I x 10000 = 0,832 V/A  ->  I = Vadc x 1,202
+//
+// L'ancienne valeur de 1,568 venait d'un ajustement a deux points dont le
+// commentaire ci-dessus avouait deja qu'il "captait autre chose" : elle
+// faisait lire 30 % TROP HAUT, ce qui correspond aux +27 % constates au
+// multimetre (1,80 A affiches pour 1,42 A reels).
+//
+// Precision attendue : +/-1,8 % (Gt) +/-1 % (Rgain) + l'offset de sortie du
+// ZXCT1109, 3 uA typiques soit 2,7 % a 1,4 A. Environ +/-6 % au total.
+#define MEAS_IIN_A_PER_V         1.202f
 
 // ---- Courant de sortie (doc §4) -------------------------------------
 // NON MESURE : valeur theorique de conception (3,0 V @ 50 mA).
@@ -199,13 +219,27 @@
 
 // Placement du declenchement, en counts avant le milieu de la conduction.
 //
-// Deux termes. D'abord la fenetre d'acquisition elle-meme : l'ADC
-// echantillonne a la FIN de celle-ci, il faut donc declencher d'autant plus
-// tot. Ensuite le CENTRAGE du groupe : les quatre voies critiques occupent
-// 4 creneaux, leurs instants d'echantillonnage s'etalent sur 3 creneaux, et
-// c'est le MILIEU de cet etalement qu'on veut au milieu de la conduction --
-// pas la premiere voie, sinon les trois autres derivent vers le blocage.
-#define ADC_TRIG_LEAD_COUNTS   ((ADC_ACQPS_FAST + 1) + ((3 * ADC_FAST_SLOT_COUNTS) / 2))
+// On centre sur I1 SEULE, et non sur le groupe des quatre voies rapides.
+// Seul terme retenu : la fenetre d'acquisition, l'ADC echantillonnant a sa
+// FIN. I1 etant en tete de sequence, son instant d'echantillonnage tombe
+// alors exactement au milieu de la conduction.
+//
+// La version precedente centrait le GROUPE, ce qui rejetait I1 1,5 creneau
+// en avance -- 250 ns apres l'amorcage a D = 0,43, en pleine transition.
+// Deux raisons de ne plus le faire :
+//
+//  1. I1 est la seule voie dont l'instant compte. VIN, V1 et VOUT sont des
+//     tensions aux bornes de gros condensateurs, derriere un RC 1 k/10 nF
+//     dont les 10 us moyennent deja sur deux periodes de decoupage. IIN et
+//     IOUT passent par des ZXCT1109 dont le shunt est EN AMONT du
+//     condensateur d'entree : verifie au scope, le courant y est continu,
+//     sans ondulation ni pointe de commutation.
+//
+//  2. Les quatre voies rapides occupent 4 x 33 = 132 counts alors que la
+//     conduction n'en dure que 128 a ce rapport cyclique. Le groupe ne
+//     rentre pas dans la fenetre propre : vouloir l'y centrer n'avait pas
+//     de solution.
+#define ADC_TRIG_LEAD_COUNTS   (ADC_ACQPS_FAST + 1)
 
 // =====================================================================
 // Regulation et bornes d'exploitation

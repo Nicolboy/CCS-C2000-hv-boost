@@ -181,7 +181,10 @@ static void enter_safe_state(void)
     hv_discharge_set(true);
 }
 
-// Priorite : surintensite > surtemperature > EMUSTOP > liaison perdue.
+// Priorite : surintensite > surtension > surtemperature > EMUSTOP >
+// liaison perdue. Le meme ordre que compute_fault_code(), pour que la LED
+// et le code remonte a l'IHM ne puissent jamais designer deux causes
+// differentes.
 static led_state_t compute_led_state(const safety_faults_t *f)
 {
     safety_faults_t faults = *f;
@@ -189,6 +192,15 @@ static led_state_t compute_led_state(const safety_faults_t *f)
     if (faults.overcurrent)
     {
         return LED_STATE_OVERCURRENT;
+    }
+    // Les surtensions sont detectees par control.c, PAS par safety.c : elles
+    // n'apparaissent donc pas dans safety_faults_t. Les oublier ici laissait
+    // la LED sur le motif nominal alors que la puissance etait coupee et
+    // verrouillee -- un affichage rassurant et faux, decouvert au banc apres
+    // la destruction du MOSFET par surtension a vide.
+    if (control_get_fault() != FAULT_NONE)
+    {
+        return LED_STATE_OVERVOLTAGE;
     }
     if (s_overtemp_t1 || s_overtemp_t2)
     {

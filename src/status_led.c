@@ -22,6 +22,12 @@
 #define OVERTEMP_PERIOD      100U // 1,0 s
 #define OVERTEMP_ON           50U // 0,5 s
 
+// Surtension : rouge RAPIDE. Se distingue a l'oeil du rouge fixe de la
+// surintensite et du rouge lent de la surtemperature -- les trois defauts
+// verrouilles doivent rester discernables sans l'IHM.
+#define OVERVOLT_PERIOD       30U // 0,3 s
+#define OVERVOLT_ON           15U // 0,15 s
+
 static led_state_t s_state = LED_STATE_STARTUP;
 static uint16_t s_phase = 0;         // position dans le motif courant
 static uint16_t s_startup_hold = STARTUP_MIN_TICKS;
@@ -89,6 +95,11 @@ void status_led_tick(void)
         on_time = OVERTEMP_ON;
         break;
 
+    case LED_STATE_OVERVOLTAGE:
+        period = OVERVOLT_PERIOD;
+        on_time = OVERVOLT_ON;
+        break;
+
     default: // STARTUP et OVERCURRENT : niveau fixe, pas de motif
         period = 1U;
         on_time = 1U;
@@ -114,6 +125,7 @@ void status_led_tick(void)
         break;
 
     case LED_STATE_OVERTEMP:
+    case LED_STATE_OVERVOLTAGE:
         red = (s_phase < on_time);
         break;
 

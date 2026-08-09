@@ -270,19 +270,20 @@ void control_tick(void)
     int32_t vout_raw;
     int32_t error;
 
-    // Decimation : donne un pas de regulation a dt rigoureusement constant.
-    s_decim++;
-    if (s_decim < CTRL_DECIM)
-    {
-        return;
-    }
-    s_decim = 0U;
-
     v1_raw = (int32_t)adc_get_raw(ADC_CH_V1);
     vout_raw = (int32_t)adc_get_raw(ADC_CH_VOUT);
 
-    // --- Protections, avant toute action sur les sorties ----------------
-    // Simples comparaisons sur les valeurs brutes, seuils pre-calcules.
+    // --- Protections : AVANT la decimation, a chaque sequence ADC --------
+    // Deux comparaisons sur les valeurs brutes, seuils pre-calcules : le
+    // cout est negligeable, la difference de latence ne l'est pas.
+    //
+    // Ces tests etaient auparavant places APRES la decimation, donc executes
+    // seulement une fois sur CTRL_DECIM : jusqu'a 195 us d'aveuglement. A
+    // vide, l'inductance continue de deverser son courant dans un
+    // condensateur que plus rien ne decharge -- la tension depasse largement
+    // le seuil avant qu'il ne soit seulement lu, et c'est le drain du MOSFET
+    // qui encaisse le depassement. Un MOSFET a ete detruit ainsi, charge
+    // oubliee. Ici la detection tombe a 15 us, soit une periode ADC.
     if (v1_raw > V1_OV_TRIP_RAW)
     {
         s_fault = FAULT_OVERVOLTAGE_V1;
@@ -294,6 +295,28 @@ void control_tick(void)
         s_trip_requested = true;
     }
 
+    // La coupure elle-meme n'attend pas non plus le pas de regulation.
+    if (s_trip_requested)
+    {
+        s_trip_requested = false;
+        s_state = CTRL_STATE_FAULT;
+    }
+    if (s_state == CTRL_STATE_FAULT)
+    {
+        both_off();
+        return;
+    }
+
+    // Decimation : donne un pas de regulation a dt rigoureusement constant.
+    s_decim++;
+    if (s_decim < CTRL_DECIM)
+    {
+        return;
+    }
+    s_decim = 0U;
+
+    // Une demande de trip venue de la boucle principale (control_trip())
+    // peut s'etre presentee entre-temps.
     if (s_trip_requested)
     {
         s_trip_requested = false;
