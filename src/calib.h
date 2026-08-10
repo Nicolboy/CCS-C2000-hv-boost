@@ -72,7 +72,7 @@
 //
 // Precision attendue : +/-1,8 % (Gt) +/-1 % (Rgain) + l'offset de sortie du
 // ZXCT1109, 3 uA typiques soit 2,7 % a 1,4 A. Environ +/-6 % au total.
-#define MEAS_IIN_A_PER_V         1.202f
+#define MEAS_IIN_A_PER_V         1.228f
 
 // EVOLUTION PREVUE : INA293A2 (gain 50) alimente en 3,3 V, shunt 0,01 ohm.
 // Basculer sur 2,000f LE JOUR OU la carte est modifiee, pas avant.
