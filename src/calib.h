@@ -38,8 +38,25 @@
 // meme noeud (condensateur d'entree, la ou est pique le pont diviseur).
 // 11,00 x 17,15/17,50 = 10,78. UN SEUL point : l'offset n'est pas separe du
 // gain, a reprendre avec un second point a tension d'entree differente.
-#define MEAS_VIN_GAIN_V_PER_V    10.78f   // broche 10, coef mesure 0,09
-#define MEAS_V1_GAIN_V_PER_V     31.32f   // broche 16, coef mesure 0,032
+// Etalonnees sur la VALEUR BRUTE DE L'ADC, lue au debogueur, contre le
+// voltmetre, a un point CONTINU sans decoupage (PWM inhibe, charge de 42
+// ohms derriere la diode) : aucune ambiguite d'instant d'echantillonnage,
+// et les noeuds sondes sont a basse impedance donc le voltmetre y est
+// parfaitement valide.
+//
+//   VIN : brut 2742 -> 2,2091 V   voltmetre 24,10 V  ->  10,909
+//   V1  : brut  944 -> 0,7605 V   voltmetre 23,44 V  ->  30,82
+//
+// Un gain pur suffit pour ces deux voies : pont diviseur suivi d'un
+// suiveur TLV9151, dont l'offset se compte en microvolts. C'est l'inverse
+// de IIN, ou le courant d'offset du ZXCT1109 impose un second point.
+//
+// Les 0,66 V d'ecart entre les deux mesures sont la chute directe de la
+// diode FFSD2065 a 0,55 A -- coherent, et c'est ce qui a permis de voir
+// que V1 lisait trop haut : l'ADC affichait la meme tension des deux
+// cotes de la diode.
+#define MEAS_VIN_GAIN_V_PER_V    10.909f  // broche 10, coef mesure 0,09
+#define MEAS_V1_GAIN_V_PER_V     30.82f   // broche 16, coef mesure 0,032
 #define MEAS_VOUT_GAIN_V_PER_V   181.82f  // broche 14, coef mesure 0,0055
 
 // ---- Courant d'entree (doc §2) --------------------------------------
