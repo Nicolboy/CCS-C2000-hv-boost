@@ -89,26 +89,35 @@
 //
 // Precision attendue : +/-1,8 % (Gt) +/-1 % (Rgain) + l'offset de sortie du
 // ZXCT1109, 3 uA typiques soit 2,7 % a 1,4 A. Environ +/-6 % au total.
-// Mesure au point CONTINU (PWM inhibe), ou le voltmetre est enfin fiable :
+// Etalonnee SANS PASSER PAR LE SHUNT, a deux points continus (PWM inhibe).
 //
-//   Vshunt = 11,68 mV        Vzxct = 0,476 V        rapport = 40,7
+// En continu le courant traverse L puis la diode jusqu'a la charge, donc
+// I = V1 / Rcharge. V1 etant calibree a 0,1 % et la charge mesuree a
+// 39,3 ohms, le courant vrai est connu sans aucun intermediaire :
 //
-// soit exactement les 40 V/V de la fiche (4 mA/V x 10 kOhm) : la chaine est
-// conforme, contrairement a ce que laissaient croire les releves pris en
-// decoupage -- le multimetre y etait perturbe par le bruit a 200 kHz, ce
-// n'etait ni un effet de charge ni un defaut d'appareil.
+//   24,0 V : brut 610 -> 0,4914 V   I = 23,44/39,3 = 0,5964 A -> 1,2137
+//   15,2 V : brut 378 -> 0,3046 V   I = 14,54/39,3 = 0,3700 A -> 1,2149
 //
-//   Rsense = 11,68 mV / 0,59 A = 19,8 mOhm, soit ses 20 mOhm nominaux
-//   gain   = 1 / (40 x 0,0198) = 1,25 A/V
-//   offset = Vadc - 40 x Vshunt = 0,4914 - 0,4672 = 24 mV, soit 2,4 uA
+// Deux points separes de 60 % en courant, et le meme rapport a 0,1 % : la
+// droite passe par l'origine, l'offset est negligeable. Aucune hypothese
+// n'est faite sur la valeur du shunt, la transconductance ou Rgain.
 //
-// Les 2,4 uA tombent dans la fourchette de 1 a 10 uA de la fiche.
+// A VIDE la voie lit encore 16 mA. Les integrer comme offset DEGRADE
+// l'accord aux points de travail (1,8 % de dispersion au lieu de 0,1 %) :
+// on prefere etre juste entre 0,4 et 3 A, la ou la mesure sert.
 //
-// VERIFICATION CROISEE : applique au point en decoupage (scope a 1,677 V),
-// ce modele donne (1,677 - 0,024) x 1,25 = 2,066 A, contre 2,06 A obtenus
-// independamment par le bilan de puissance. Deux regimes, deux instruments.
-#define MEAS_IIN_A_PER_V         1.250f
-#define MEAS_IIN_OFFSET_V        0.024f
+// PIEGES ECARTES EN CHEMIN, a ne pas refaire :
+//  - le multimetre est perturbe par le decoupage a 200 kHz et lisait 56 %
+//    de moins que l'ADC sur la sortie du ZXCT. Ce n'est PAS un effet de
+//    charge : verifie a 24,07 V sous 10 kOhm contre 24,10 V sans, donc
+//    10 MOhm d'impedance d'entree. Etalonner cette voie EN CONTINU.
+//  - la valeur effective du shunt ressort a 19 mOhm et non aux 22 mOhm
+//    nominaux. Tout etalonnage qui s'appuie dessus herite de l'ecart.
+//  - la carte de controle etant sur alimentation separee, rien ne
+//    contourne le shunt : l'amperemetre et le shunt voient bien le meme
+//    courant.
+#define MEAS_IIN_A_PER_V         1.214f
+#define MEAS_IIN_OFFSET_V        0.000f
 
 // EVOLUTION PREVUE : INA293A2 (gain 50) alimente en 3,3 V, shunt 0,01 ohm.
 // Basculer sur 2,000f LE JOUR OU la carte est modifiee, pas avant.
