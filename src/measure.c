@@ -13,9 +13,14 @@ float measure_vin(uint16_t raw)
     return raw_to_volts(raw) * MEAS_VIN_GAIN_V_PER_V;
 }
 
+// Le ZXCT1109 debite un courant d'offset meme a courant nul (1 a 10 uA,
+// typiquement 3) : sur Rgain il produit une tension constante qu'il faut
+// retrancher AVANT d'appliquer le gain. Un gain seul ne peut pas etre juste
+// aux deux bouts de l'echelle -- c'est ce qui a fait errer l'etalonnage de
+// cette voie entre 1,20 et 1,28 A/V selon le courant du point de mesure.
 float measure_iin(uint16_t raw)
 {
-    return raw_to_volts(raw) * MEAS_IIN_A_PER_V;
+    return (raw_to_volts(raw) - MEAS_IIN_OFFSET_V) * MEAS_IIN_A_PER_V;
 }
 
 float measure_v1(uint16_t raw)

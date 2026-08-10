@@ -89,7 +89,26 @@
 //
 // Precision attendue : +/-1,8 % (Gt) +/-1 % (Rgain) + l'offset de sortie du
 // ZXCT1109, 3 uA typiques soit 2,7 % a 1,4 A. Environ +/-6 % au total.
-#define MEAS_IIN_A_PER_V         1.228f
+// Mesure au point CONTINU (PWM inhibe), ou le voltmetre est enfin fiable :
+//
+//   Vshunt = 11,68 mV        Vzxct = 0,476 V        rapport = 40,7
+//
+// soit exactement les 40 V/V de la fiche (4 mA/V x 10 kOhm) : la chaine est
+// conforme, contrairement a ce que laissaient croire les releves pris en
+// decoupage -- le multimetre y etait perturbe par le bruit a 200 kHz, ce
+// n'etait ni un effet de charge ni un defaut d'appareil.
+//
+//   Rsense = 11,68 mV / 0,59 A = 19,8 mOhm, soit ses 20 mOhm nominaux
+//   gain   = 1 / (40 x 0,0198) = 1,25 A/V
+//   offset = Vadc - 40 x Vshunt = 0,4914 - 0,4672 = 24 mV, soit 2,4 uA
+//
+// Les 2,4 uA tombent dans la fourchette de 1 a 10 uA de la fiche.
+//
+// VERIFICATION CROISEE : applique au point en decoupage (scope a 1,677 V),
+// ce modele donne (1,677 - 0,024) x 1,25 = 2,066 A, contre 2,06 A obtenus
+// independamment par le bilan de puissance. Deux regimes, deux instruments.
+#define MEAS_IIN_A_PER_V         1.250f
+#define MEAS_IIN_OFFSET_V        0.024f
 
 // EVOLUTION PREVUE : INA293A2 (gain 50) alimente en 3,3 V, shunt 0,01 ohm.
 // Basculer sur 2,000f LE JOUR OU la carte est modifiee, pas avant.
