@@ -16,6 +16,7 @@ extern uint16_t RamfuncsLoadSize;
 extern uint16_t RamfuncsRunStart;
 
 interrupt void cpu_timer0_isr(void);
+interrupt void cpu_timer1_isr(void);
 
 // Dernier CommandState recu, expose au debogueur. Les consignes partent aux
 // bornes basses : tant que l'ESP32 n'a rien envoye de valide, rien ne
@@ -253,7 +254,7 @@ void main(void)
     safety_init();
 
     // control_init() lit les periodes ePWM, donc apres pwm_init(), et avant
-    // adc_init() dont l'ISR appellera control_tick().
+    // adc_init() dont l'ISR appellera control_fast_check().
     control_init();
 
     // ADC : declenche par ePWM1, donc apres pwm_init().
@@ -267,14 +268,20 @@ void main(void)
 
     EALLOW;
     PieVectTable.TINT0 = &cpu_timer0_isr;
+    PieVectTable.TINT1 = &cpu_timer1_isr;
     EDIS;
 
     InitCpuTimers();
     ConfigCpuTimer(&CpuTimer0, 60, 10000); // base 10 ms (voir cpu_timer0_isr)
+    ConfigCpuTimer(&CpuTimer1, 60, CTRL_TICK_PERIOD_US); // pas de regulation
     StartCpuTimer0(); // ConfigCpuTimer laisse TSS=1 (timer a l'arret) par conception
+    StartCpuTimer1();
 
     IER |= M_INT1;
     PieCtrlRegs.PIEIER1.bit.INTx7 = 1; // TINT0
+
+    // CPU Timer 1 : INT13, cable directement sur le coeur, donc pas de PIEIER.
+    IER |= M_INT13;
 
     EINT;
     ERTM;
@@ -474,4 +481,20 @@ interrupt void cpu_timer0_isr(void)
     }
 
     PieCtrlRegs.PIEACK.all = PIEACK_GROUP1;
+}
+
+// Pas de regulation, a CTRL_TICK_PERIOD_US. Le CPU Timer 1 est cable
+// DIRECTEMENT sur INT13, hors du PIE : il n'y a donc ni PIEIER a armer ni
+// PIEACK a rendre, seulement le drapeau du timer a effacer.
+//
+// Ce contexte a ete choisi pour sa position dans la hierarchie : INT13 passe
+// APRES l'ISR ADC (INT1), qui garde donc sa latence de detection de
+// survoltage quoi que fasse la regulation, et AVANT l'UART (groupe 9),
+// conformement a la regle "la regulation est prioritaire, l'envoi UART se
+// fait s'il reste du temps".
+interrupt void cpu_timer1_isr(void)
+{
+    control_tick();
+
+    CpuTimer1Regs.TCR.bit.TIF = 1;
 }

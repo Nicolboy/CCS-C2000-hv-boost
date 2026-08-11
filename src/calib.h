@@ -305,6 +305,12 @@
 //     de solution.
 #define ADC_TRIG_LEAD_COUNTS   (ADC_ACQPS_FAST + 1)
 
+// INSTRUMENTATION TEMPORAIRE -- voir l'en-tete d'adc.c pour le detail et
+// pour l'avertissement de securite. A 1, la DUREE DE L'ISR ADC est marquee
+// sur HV_EN et bsp_gpio.c neutralise hv_enable_set().
+// REMETTRE A 0 AVANT TOUT ESSAI EN TENSION.
+#define ADC_TIMING_PROBE   1
+
 // =====================================================================
 // Regulation et bornes d'exploitation
 // =====================================================================
@@ -356,9 +362,14 @@
 // de la reponse reelle. Le terme proportionnel viendra ensuite.
 #define CTRL_SHIFT               12U
 
-// Decimation depuis l'ISR ADC (66,7 kHz) : une regulation toutes les
-// CTRL_DECIM sequences, soit ~5,1 kHz. Donne un dt rigoureusement constant.
-#define CTRL_DECIM               13U
+// Periode du pas de regulation, en microsecondes, imposee par le CPU Timer 1.
+// 195 us -> 5128 Hz, soit exactement la cadence qu'obtenait la decimation par
+// 13 des 66,7 kHz de l'ADC : CTRL_SHIFT et les vitesses de rampe gardent donc
+// la meme signification qu'avant le changement de contexte.
+//
+// La regulation a quitte l'ISR ADC : une sequence sur treize, celle-ci
+// depassait 9 us et debordait sur la conversion suivante. Voir control.c.
+#define CTRL_TICK_PERIOD_US      195UL
 
 // ---- Rampe de demarrage ----------------------------------------------
 // On rampe la CONSIGNE et non le duty : la boucle reste fermee pendant

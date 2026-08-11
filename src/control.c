@@ -65,8 +65,6 @@ static int32_t s_accum_max[2] = {0, 0};
 static uint16_t s_duty_max_counts[2] = {0, 0};
 static uint16_t s_settle_count = 0;
 
-static uint16_t s_decim = 0;
-
 // ---- Utilitaires -------------------------------------------------------
 
 static void stage_reset(uint16_t i)
@@ -167,7 +165,6 @@ void control_init(void)
     s_run_requested = false;
     s_trip_requested = false;
     s_settle_count = 0;
-    s_decim = 0;
 
     both_off();
 }
@@ -262,28 +259,27 @@ bool control_hv_allowed(void)
     return (s_state == CTRL_STATE_RUN) && s_s2_enabled;
 }
 
-// ---- Boucle de conduite, appelee depuis l'ISR ADC ----------------------
-
-void control_tick(void)
+// ---- Surveillance rapide, appelee depuis l'ISR ADC ---------------------
+//
+// Deux comparaisons sur les valeurs brutes, seuils pre-calcules a la
+// compilation : le cout est negligeable, la difference de latence ne l'est
+// pas.
+//
+// Ces tests ont d'abord vecu APRES la decimation du pas de regulation, donc
+// executes une fois sur treize : jusqu'a 195 us d'aveuglement. A vide,
+// l'inductance continue de deverser son courant dans un condensateur que
+// plus rien ne decharge -- la tension depasse largement le seuil avant qu'il
+// ne soit seulement lu, et c'est le drain du MOSFET qui encaisse le
+// depassement. Un MOSFET a ete detruit ainsi, charge oubliee.
+//
+// Ils sont maintenant dans leur propre fonction, appelee a CHAQUE sequence
+// ADC : la detection tombe a 15 us et, surtout, elle ne depend plus du
+// contexte ou tourne la regulation.
+void control_fast_check(void)
 {
-    int32_t v1_raw;
-    int32_t vout_raw;
-    int32_t error;
+    int32_t v1_raw = (int32_t)adc_get_raw(ADC_CH_V1);
+    int32_t vout_raw = (int32_t)adc_get_raw(ADC_CH_VOUT);
 
-    v1_raw = (int32_t)adc_get_raw(ADC_CH_V1);
-    vout_raw = (int32_t)adc_get_raw(ADC_CH_VOUT);
-
-    // --- Protections : AVANT la decimation, a chaque sequence ADC --------
-    // Deux comparaisons sur les valeurs brutes, seuils pre-calcules : le
-    // cout est negligeable, la difference de latence ne l'est pas.
-    //
-    // Ces tests etaient auparavant places APRES la decimation, donc executes
-    // seulement une fois sur CTRL_DECIM : jusqu'a 195 us d'aveuglement. A
-    // vide, l'inductance continue de deverser son courant dans un
-    // condensateur que plus rien ne decharge -- la tension depasse largement
-    // le seuil avant qu'il ne soit seulement lu, et c'est le drain du MOSFET
-    // qui encaisse le depassement. Un MOSFET a ete detruit ainsi, charge
-    // oubliee. Ici la detection tombe a 15 us, soit une periode ADC.
     if (v1_raw > V1_OV_TRIP_RAW)
     {
         s_fault = FAULT_OVERVOLTAGE_V1;
@@ -295,7 +291,8 @@ void control_tick(void)
         s_trip_requested = true;
     }
 
-    // La coupure elle-meme n'attend pas non plus le pas de regulation.
+    // La coupure n'attend pas le pas de regulation : elle est appliquee ici,
+    // dans la meme sequence que la detection.
     if (s_trip_requested)
     {
         s_trip_requested = false;
@@ -304,16 +301,26 @@ void control_tick(void)
     if (s_state == CTRL_STATE_FAULT)
     {
         both_off();
-        return;
     }
+}
 
-    // Decimation : donne un pas de regulation a dt rigoureusement constant.
-    s_decim++;
-    if (s_decim < CTRL_DECIM)
-    {
-        return;
-    }
-    s_decim = 0U;
+// ---- Pas de regulation, appele depuis l'ISR du CPU Timer 1 -------------
+//
+// N'etait qu'une branche decimee de l'ISR ADC. Le cout mesure au scope : une
+// sequence sur treize, l'ISR ADC passait de 4,9 us a plus de 9 us et
+// debordait sur la conversion suivante -- l'ADC ecrivant alors ADCRESULT
+// pendant que l'ISR recopiait encore les resultats precedents.
+//
+// Sur son propre timer, le dt est aussi rigoureusement constant qu'avec la
+// decimation (meme cadence, cf. CTRL_TICK_PERIOD_US), et l'ISR ADC -- INT1,
+// donc plus prioritaire que INT13 -- la preempte sans dommage : la
+// surveillance de survoltage garde sa latence de 15 us quoi qu'il arrive
+// ici. La regulation reste prioritaire sur l'UART, qui est en groupe 9.
+void control_tick(void)
+{
+    int32_t v1_raw = (int32_t)adc_get_raw(ADC_CH_V1);
+    int32_t vout_raw = (int32_t)adc_get_raw(ADC_CH_VOUT);
+    int32_t error;
 
     // Une demande de trip venue de la boucle principale (control_trip())
     // peut s'etre presentee entre-temps.

@@ -13,9 +13,14 @@
 // sequenceur ici, donc rien a verifier de ce cote, et une liaison perdue
 // coupe tout immediatement.
 //
-// Regulation : integrateur pur en virgule fixe, execute dans l'ISR ADC.
-// Ni multiplication ni division -- uniquement comparaisons, additions et
-// decalages, conformement a la discipline d'interruption du projet.
+// Regulation : integrateur pur en virgule fixe. Ni multiplication ni
+// division -- uniquement comparaisons, additions et decalages, conformement
+// a la discipline d'interruption du projet.
+//
+// DEUX contextes, et la distinction est de securite :
+//   control_fast_check()  ISR ADC,        66,7 kHz  -> survoltage
+//   control_tick()        ISR CPU Timer 1, 5,1 kHz  -> regulation
+// Voir les commentaires de chacune dans control.c.
 
 void control_init(void);
 
@@ -56,8 +61,15 @@ void control_restart(void);
 // redemarre sans repasser par control_init() ou un cycle d'alimentation.
 void control_trip(void);
 
-// A appeler a CADENCE FIXE depuis l'ISR ADC. Decime en interne pour obtenir
-// le pas de regulation. Ne fait rien tant que la marche n'est pas demandee.
+// A appeler a CHAQUE sequence ADC, depuis l'ISR ADC. Ne fait que tester les
+// seuils de survoltage et couper : deux comparaisons sur des valeurs brutes.
+// C'est le seul chemin de protection en tension, il ne doit jamais etre
+// ralenti ni conditionne.
+void control_fast_check(void);
+
+// A appeler a CADENCE FIXE depuis l'ISR du CPU Timer 1 (CTRL_TICK_PERIOD_US).
+// Un appel = un pas de regulation. Ne fait rien tant que la marche n'est pas
+// demandee.
 void control_tick(void);
 
 // Lecture d'etat pour la telemetrie et l'affichage (boucle principale).

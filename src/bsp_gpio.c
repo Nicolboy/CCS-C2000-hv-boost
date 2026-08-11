@@ -87,6 +87,18 @@ void stage_enable_set(stage_id_t stage, bool enabled)
 
 void hv_enable_set(bool enabled)
 {
+#if ADC_TIMING_PROBE
+    // GPIO32 appartient a l'instrumentation de timing ADC (adc.c). La boucle
+    // principale repasse par enter_safe_state() a chaque tour tant que la
+    // marche n'est pas demandee, soit quelques dizaines de milliers de fois
+    // par seconde : ses ecritures tronqueraient l'impulsion en plein milieu
+    // de la conversion. On les ignore.
+    //
+    // SANS DANGER uniquement parce que l'etage 2 et la sortie haute tension
+    // ne sont pas peuples. Des qu'ils le seront, ADC_TIMING_PROBE doit
+    // repasser a 0 -- sinon HV_EN n'obeit plus a l'etat sur.
+    (void)enabled;
+#else
     if (enabled)
     {
         GpioDataRegs.GPBSET.bit.GPIO32 = 1;
@@ -95,6 +107,7 @@ void hv_enable_set(bool enabled)
     {
         GpioDataRegs.GPBCLEAR.bit.GPIO32 = 1;
     }
+#endif
 }
 
 void hv_discharge_set(bool active)
