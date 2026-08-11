@@ -31,6 +31,28 @@
 // conversions sequentielles ne rentrent pas dans une fenetre plus courte.
 typedef enum
 {
+    // EPISODE A CONNAITRE, parce qu'il peut revenir. Sous 50 W, la broche de
+    // V1 a porte une oscillation continue a 2,4 MHz de +/-35 mV, relancee par
+    // chaque commutation donc SYNCHRONE du decoupage. L'ADC echantillonnant
+    // lui aussi sur CMPB, il retombait toujours sur la meme phase : le
+    // repliement ne donne alors pas du bruit mais un BIAIS CONTINU. Constate :
+    // 46,0 V lus pour 44,8 V reels, soit +2,7 %, stable. Et V1 etant la
+    // grandeur regulee, c'etait la tension DELIVREE qui etait fausse, pas
+    // seulement l'affichage.
+    //
+    // Diagnostic pose en permutant temporairement V1 et IIN : deux creneaux de
+    // decalage = 1,10 us = 230 degres de l'oscillation, et l'erreur a disparu.
+    // Preuve que l'ADC voyait bien une composante synchrone repliee.
+    //
+    // Cause reelle, trouvee ensuite : le retour d'alimentation de la carte
+    // commande passait par les fils de masse de la NAPPE. Leur inductance
+    // developpait un L*di/dt qui s'ajoutait en serie a chaque voie analogique.
+    // Corrige en amenant le "-" de l'alimentation commande directement a la
+    // carte, apparie avec son "+" : le bruit a la broche est tombe d'un
+    // facteur 2,2 alors que celui de la carte puissance n'avait pas bouge.
+    // Il reste un couplage en aval du filtre (le RC n'attenue que d'un
+    // facteur 2 au lieu de 33) : brochage alterne masse/signal dans la nappe
+    // a la prochaine revision des cartes.
     ADC_CH_I1 = 0,  // broche  9, ADCINA2 / COMP1A / AIO2   -- groupe critique
     ADC_CH_V1,      // broche 16, ADCINB4 / AIO12           -- groupe critique
     ADC_CH_VIN,     // broche 10, ADCINA0 (partagee VREFHI) -- groupe critique
