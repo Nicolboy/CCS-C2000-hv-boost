@@ -110,15 +110,27 @@ en télémétrie dès les premiers paliers.
 
 ## 3. Bloquants avant toute mise sous tension
 
-- [ ] 🔴 **MOSFET de décharge active monté, ≥ 600 V.** L'IRF840 500 V est
-      sous-dimensionné pour une sortie qui atteint 500 V et coupe à 520 V.
-      Sans lui la carte n'est pas manipulable en sécurité.
-- [ ] 🔴 **RC 100 Ω / 100 pF sur l'entrée du driver de l'étage 2** (sortie de
-      la porte ET IC9 → driver), référencé à la masse du driver.
-- [ ] 🔴 **RC 1 kΩ / 100 pF à l'entrée de l'ampli de shunt I2.**
-- [ ] Masse du driver étage 2 à sa position d'origine.
+### ✅ Déjà intégré sur la carte V0.2 — plus rien à monter
+
+- **MOSFET de décharge active ≥ 600 V**
+- **RC 100 Ω / 100 pF sur l'entrée du driver de l'étage 2** — le correctif qui
+  a résolu l'oscillation de grille de l'étage 1
+- **RC 1 kΩ / 100 pF à l'entrée de l'ampli de shunt I2**
+- **Retour de masse en étoile pour les ponts diviseurs**
+
+Seul le **MOSFET principal de l'étage 2** reste à monter.
+
+### Reste à faire avant la première mise sous tension
+
+- [ ] MOSFET principal étage 2 monté, **≥ 600 V** (la sortie atteint 500 V et
+      la protection coupe à 520 V).
+- [ ] Masse du driver étage 2 **en position d'origine** — ne pas la passer en
+      Kelvin sur la source, voir §1.
 - [ ] Tenue en tension du condensateur de sortie vérifiée (≥ 600 V).
 - [ ] Ohmmètre sur le shunt I2 et sur le réseau Rf/Rg de son ampli.
+- [ ] **Vérifier la forme d'onde de grille de l'étage 2 avant toute montée en
+      puissance** — le RC est en place, mais il n'a jamais été validé sur cet
+      étage.
 
 ### 🔴 Bloquant logiciel côté ESP32
 
@@ -226,27 +238,41 @@ un seul point de déclenchement sert les neuf voies, et le déplacer avait mis
 
 ## 6. Problèmes ouverts hérités de l'étage 1
 
-### 🔴 Chute de masse sur les ponts diviseurs analogiques
+### 🔴 Chute de masse sur les ponts diviseurs — localisation à trouver
 
-Les ponts partagent **~20 mΩ de retour de masse avec le chemin de puissance**.
-L'erreur est proportionnelle au courant d'entrée :
+Une impédance d'environ **20 mΩ est partagée entre les ponts diviseurs et le
+chemin de puissance**. L'erreur est **proportionnelle au courant d'entrée**,
+ce qui exclut une erreur de gain :
 
-| Courant d'entrée | Erreur `V1` ramenée à la broche |
-|---|---|
-| 0,97 A | +20 mV |
-| 2,17 A | +51 mV (soit **+3,4 %** sur la tension affichée) |
+| Courant d'entrée | Erreur `V1` ramenée à la broche | Résistance impliquée |
+|---|---|---|
+| 0,97 A | +20 mV | 20,6 mΩ |
+| 2,17 A | +51 mV (**+3,4 %** sur la tension affichée) | 23,5 mΩ |
+
+Rapport des erreurs 2,55 pour un rapport de courants 2,24. `VIN` donne le même
+ordre de grandeur (~17 mΩ).
 
 Conséquence : la boucle affiche fidèlement sa consigne de 46,0 V pendant que
 le vrai `V_inter` est à **44,5 V**, et l'écart bouge avec la charge.
 
-**Ne pas corriger les gains pour compenser** — ils sont justes, validés à
-plusieurs points. Le correctif est un **retour de masse dédié en étoile** vers
-l'AGND du DSP. `VOUT` subira exactement le même défaut, et elle porte le seuil
-de 520 V.
+> ⚠️ **Le retour de masse en étoile est DÉJÀ intégré sur la carte V0.2.**
+> L'impédance mesurée se trouve donc ailleurs — le candidat le plus probable
+> est l'**interconnexion entre la carte de puissance et la carte de
+> contrôle** : les ponts diviseurs sont sur la carte de puissance, la
+> référence AGND de l'ADC sur la carte de contrôle. Un connecteur et quelques
+> centimètres de fil valent facilement 20 mΩ, et aucun routage en étoile
+> interne à une carte ne corrige ça.
 
-C'est le **troisième problème de masse de la campagne**. Un examen d'ensemble
-du plan de masse est plus probablement la bonne réponse que trois correctifs
-ponctuels.
+**Mesure qui localise le coupable en une fois** : en fonctionnement à ~2 A,
+mesurer au voltmètre la tension **entre la référence de masse du pont
+diviseur V1 et l'AGND du DSP**. On attend ~51 mV. L'endroit où cette tension
+apparaît est l'endroit à corriger — probablement par un **fil de retour de
+mesure dédié** entre les deux cartes, séparé du retour de puissance.
+
+**Ne pas corriger les gains pour compenser** — ils sont justes, validés à
+plusieurs points, et une compensation déplacerait simplement l'erreur vers une
+autre charge. `VOUT` subira exactement le même défaut, et elle porte le seuil
+de coupure à 520 V.
 
 ### Écart résiduel sur le gain `I1`
 

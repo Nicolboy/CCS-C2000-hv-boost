@@ -188,7 +188,7 @@ sur le seul bleeder de 1 MΩ.
 | Mesure IIN | **INA293A2** (gain 50), Rsense **0,01 Ω** — *V0.1 : ZXCT1109, Rsense 0,0208 Ω, Rgain 10 kΩ* | monté **V0.2** |
 | Shunt MOSFET **étage 1** | **0,01 Ω** (V0.1 : 0,02 Ω) — chaîne à **0,34 V/A**, pleine échelle 9,7 A | monté **V0.2** |
 | Shunt MOSFET **étage 2** | **0,02 Ω** — inchangé depuis V0.1, gain jamais mesuré | monté |
-| MOSFET de décharge | **≥ 600 V exigé** — l'IRF840 500 V est sous-dimensionné | **NON MONTÉ — bloquant** |
+| MOSFET de décharge | **≥ 600 V** (l'IRF840 500 V était sous-dimensionné) | **monté V0.2** |
 | NTC | B57451V5103J062 (0805), pont 10 k / 10 k | monté |
 
 ### Évolution de la chaîne d'amplification — historique important
@@ -332,11 +332,19 @@ d'entrée**, jusqu'aux 10 V de conception. La pleine échelle de la chaîne
 
 ## 7. Points ouverts et bloquants matériels
 
-### Bloquant avant toute mise sous tension de l'étage 2
+### Bloquants matériels de l'étage 2 — **tous levés en V0.2**
 
-- **MOSFET de décharge active non monté.** Ne monter qu'un **600 V
-  minimum** — l'IRF840 500 V est sous-dimensionné pour une sortie qui peut
-  atteindre 500 V et couper à 520 V.
+Intégrés à la carte V0.2, plus rien à monter côté matériel :
+
+- **MOSFET de décharge active ≥ 600 V** — monté. L'IRF840 500 V était
+  sous-dimensionné pour une sortie qui atteint 500 V et coupe à 520 V.
+- **RC 100 Ω / 100 pF sur l'entrée du driver de l'étage 2** — intégré. C'est
+  le correctif qui a résolu l'oscillation de grille de l'étage 1 ; sans lui un
+  MOSFET a été détruit (voir `docs/PROMPT-oscillation-grille.md`).
+- **RC 1 kΩ / 100 pF à l'entrée de l'ampli de shunt I2** — intégré.
+- **Retour de masse en étoile pour les ponts diviseurs** — intégré.
+
+Reste à monter : le **MOSFET principal de l'étage 2**.
 
 ### Écart de gain sur I1 — **clos en V0.2**
 
