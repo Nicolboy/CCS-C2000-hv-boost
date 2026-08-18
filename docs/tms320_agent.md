@@ -40,6 +40,7 @@ $T,FREQ1=200000,FREQ2=100000,DUTY1=45.2,DUTY2=50.0,VIN=400.5,IIN=1.20,V1=200.3,I
 | `V1SP` | V | Consigne V1 **effectivement acceptée** (pas forcément égale à la dernière demandée si rejet) |
 | `VOSP` | V | Consigne VOUT effectivement acceptée, même remarque |
 | `REJ` | compteur | Nombre cumulé de consignes rejetées depuis le boot |
+| `LIM` | code | **Repliement de puissance actif** — voir section dédiée. **À implémenter**, absent du firmware actuel |
 
 Tous les champs restent optionnels à l'émission individuelle (un champ
 absent garde sa dernière valeur côté ESP32), mais en pratique le firmware
@@ -92,16 +93,42 @@ sans conséquence, perdre `FAULT` ne l'est pas.
 | `6` | Survoltage V_inter (> 55 V) | verrouillé |
 | `7` | Survoltage sortie HT (> 520 V) | verrouillé |
 | `8` | Liaison UART perdue | **transitoire**, se relève seul |
+| `9` | **Sous-tension d'entrée VIN (< 9,5 V)** | **verrouillé** |
 
-Les codes 6 et 7 sont détectés dans l'ISR ADC par comparaison directe sur
-la valeur brute, sans conversion en volts — les seuils sont pré-calculés en
-counts à la compilation.
+Les codes 6, 7 et 9 sont détectés dans l'ISR ADC par comparaison directe
+sur la valeur brute, sans conversion en volts — les seuils sont pré-calculés
+en counts à la compilation.
+
+### `9` — sous-tension d'entrée
+
+Motif : un élévateur compenserait une entrée qui s'effondre en augmentant
+le rapport cyclique, donc le courant, **jusqu'à la surintensité**. La
+coupure intervient avant.
+
+Trois comportements que l'IHM et l'orchestrateur doivent connaître :
+
+- **La surveillance ne s'arme qu'après un premier passage de VIN au-dessus
+  de 12 V.** Au démarrage, VIN traverse forcément la zone basse pendant la
+  montée de l'alimentation ; surveiller dès le reset rendrait la carte
+  impossible à démarrer. Une fois armée, elle le reste jusqu'au reset.
+- **Seuil à 9,5 V, soit 0,5 V sous le minimum de conception (10 V)** : à
+  10 V pile, l'ondulation d'entrée et le creux d'un échelon de charge
+  feraient tomber un défaut dont on ne sort qu'en coupant l'alimentation.
+- **Anti-rebond de 5 séquences ADC** (75 µs, quinze périodes de découpage).
+
+C'est un défaut **verrouillé** : comme les codes 2 à 7, il exige un cycle
+d'alimentation. Une IHM qui le traiterait comme transitoire attendrait
+indéfiniment un retour spontané à `FAULT=0`.
 
 **Priorité entre défauts simultanés, telle qu'implémentée :**
 
 ```
-2 > 3 > 6 > 7 > 4 > 5 > 8 > 1
+2 > 3 > 6 > 7 > 9 > 4 > 5 > 8 > 1
 ```
+
+Les codes 6, 7 et 9 proviennent de la même variable interne et s'excluent
+mutuellement ; leur ordre relatif est celui de la cascade de tests de
+l'ISR ADC.
 
 Les survoltages passent donc **avant** les surtempératures, et non après
 comme une révision antérieure de ce document le supposait. Pour la question
@@ -122,6 +149,69 @@ doit exiger une intervention humaine.
 > matériel) ne dépend jamais de cette liaison UART. `FAULT` est un simple
 > report d'information, envoyé après coup — la coupure a déjà eu lieu en
 > matériel avant même que la trame ne soit construite.
+
+---
+
+## Repliement de puissance — tag `LIM` (**à implémenter**)
+
+Le TMS320 plafonne la puissance qu'il tire de l'entrée, selon la tension
+d'entrée :
+
+| Condition | Plafond | `LIM` |
+|---|---|---|
+| Pas de limitation active | — | `0` |
+| `VIN > 20 V` | **50 W** | `1` |
+| `VIN ≤ 20 V` | **25 W** | `2` |
+
+### Ce n'est PAS un défaut, et c'est tout l'enjeu de ce tag
+
+Le repliement **laisse la régulation tourner**. Rien n'est coupé, rien
+n'est verrouillé, `FAULT` reste à `0` et `STATE` à `4`. Il n'occupe donc
+volontairement **aucun code `FAULT`** : un consommateur qui interromprait
+son traitement sur `FAULT != 0` s'arrêterait alors que l'alimentation
+fonctionne — de façon bridée, mais nominale.
+
+La conséquence est symétrique et il faut la voir : **sans lire `LIM`, un
+point de mesure plafonné est rigoureusement indiscernable d'un point
+libre.** `VOUT` sera stable, `STATE` vaudra `4`, `FAULT` vaudra `0`, et la
+tension pourra pourtant rester sous sa consigne parce que le duty est bridé
+— pas parce que la boucle est mal réglée. C'est exactement le genre de
+point qui pollue une courbe de rendement sans laisser de trace.
+
+`LIM` est donc placé **en tête de trame** avec `FAULT`, `STATE` et `REJ` :
+sa disparition par troncature ferait croire à un fonctionnement libre.
+
+### Pourquoi 20 V, et pourquoi un facteur 2
+
+Le seuil est le **pendant logiciel d'une limite matérielle** déjà connue :
+la chaîne de mesure de courant sature à 4,04 A et le seuil de protection
+matériel est à 3,5 A **sur le courant crête**, pas moyen.
+
+| Vin | Plafond | I_moyen | I_crête | Marge sous 3,5 A |
+|---|---|---|---|---|
+| 22,4 V | 50 W | 2,23 A | 2,84 A | 19 % |
+| 20,0 V | 50 W | 2,50 A | ~3,10 A | 11 % |
+| 19,9 V | 25 W | 1,26 A | ~1,86 A | 47 % |
+| 10,0 V | 25 W | 2,50 A | 2,92 A | 17 % |
+
+Sans repliement, 50 W à 15 V donnent 4,04 A de crête — **au-dessus du
+seuil**, donc un déclenchement à chaque tentative ; et à 10 V, 5,68 A, soit
+au-delà de ce que la chaîne sait mesurer. Le repliement rend la plage
+d'entrée complète exploitable au lieu de la limiter à ~19 V.
+
+La discontinuité à 20 V est assumée : elle place le courant crête très bas
+juste sous le seuil, ce qui est le comportement sûr.
+
+### Comportement attendu du consommateur
+
+- **Ne jamais traiter `LIM != 0` comme une erreur.** Ce n'est pas un défaut,
+  et aucune campagne ne doit s'interrompre dessus.
+- **Toujours annoter un point de mesure avec la valeur de `LIM`.** Un point
+  relevé sous plafond n'est pas comparable à un point libre.
+- **Ne pas déduire `LIM` de `VIN`** côté ESP32 ou orchestrateur, même si la
+  règle paraît simple : l'hystérésis sur le seuil de 20 V rend la valeur
+  dépendante de l'historique, pas seulement de `VIN` instantané. Le TMS320
+  reste la seule source de vérité, comme pour les bornes de consigne.
 
 ---
 

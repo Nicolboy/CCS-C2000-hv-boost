@@ -1,5 +1,14 @@
 # Mesures carte puissance — TMS320F28027 dual boost
 
+> ⚠️ **CE DOCUMENT DÉCRIT LA CARTE V0.1.** La carte en service est la V0.2,
+> dont le brochage analogique et la chaîne de mesure du courant d'entrée
+> (ZXCT1109 → INA293A2) diffèrent. **Ne pas reprendre ces valeurs pour
+> remplir `calib.h`.** L'état voie par voie sur V0.2 est dans
+> `hardware.md` §6 ; la synthèse V0.1 et ses pièges dans
+> `docs/calibration-V0.1.md`. Ce fichier reste la trace brute des séances
+> de banc V0.1 et redevient la référence si une carte V0.1 est remise en
+> service.
+
 Suivi des mesures de calibration effectuées sur la carte élévateur (à moitié
 complète : composants de puissance et drivers MOSFET pas encore montés).
 Ce document est la source pour remplir `calib.h` dans le firmware. Les

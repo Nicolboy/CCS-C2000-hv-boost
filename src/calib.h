@@ -21,6 +21,27 @@
 // Constantes de calibration des chaines de mesure.
 // Source : docs/mesure-cartepuissance.md (mesures reelles sur la carte
 // elevateur). Aucune de ces valeurs ne doit apparaitre ailleurs.
+//
+// ---------------------------------------------------------------------
+// CARTE DE PUISSANCE V0.2 -- ETALONNAGE PARTIEL. LIRE AVANT D'EXPLOITER.
+// ---------------------------------------------------------------------
+// Tout l'etalonnage historique a ete fait sur la carte V0.1 : il est
+// archive dans docs/calibration-V0.1.md et NE S'APPLIQUE PLUS tel quel.
+// Etat voie par voie sur V0.2 :
+//
+//   V1   [V0.2] refait, deux points, confiance elevee
+//   IIN  [V0.2] refait, INA293A2 monte, valeur theorique confirmee
+//   VIN  [V0.1] ecart ~1 %, non separe gain/offset -- A REFAIRE
+//   VOUT [V0.1] non verifiee sur V0.2
+//   I1   [V0.1] NON VERIFIEE -- pilote le seuil de protection, cf. plus bas
+//   I2   [V0.1] jamais mesuree, ni sur V0.1 ni sur V0.2
+//   IOUT [V0.1] jamais mesuree
+//   NTC  [V0.1] resistance fixe reelle jamais confirmee
+//
+// Methode imposee pour toute reprise : en CONTINU, PWM inhibe, sur la
+// valeur BRUTE de l'ADC lue au debogueur -- jamais sur l'affichage du
+// serveur, arrondi a une decimale, qui interdit de separer un gain d'un
+// offset. Pieges detailles dans docs/calibration-V0.1.md section 4.
 // =====================================================================
 
 // ---- Chaines de tension (doc §1) ------------------------------------
@@ -55,11 +76,38 @@
 // diode FFSD2065 a 0,55 A -- coherent, et c'est ce qui a permis de voir
 // que V1 lisait trop haut : l'ADC affichait la meme tension des deux
 // cotes de la diode.
+// [V0.2] V1 REFAITE. Le pont diviseur a change entre V0.1 et V0.2 : l'erreur
+// est un GAIN PUR, sans offset, ce que deux points ecartes de 86 % etablissent
+// sans ambiguite (le meme rapport a 0,01 % pres ne peut pas venir d'un offset).
+//
+//   43,68 V au multimetre / 46,0 V annonces  ->  30,82 x 43,68/46,0 = 29,266
+//   23,55 V au multimetre / 24,8 V annonces  ->  30,82 x 23,55/24,8 = 29,266
+//
+// Le second point a ete pris en CONTINU, PWM inhibe : VIN 24,18 V et V1
+// 23,55 V, soit 0,63 V d'ecart -- la chute directe de la FFSD2065. Un boost ne
+// peut pas sortir moins que son entree, la conduction etait donc purement
+// L -> diode -> charge, sans ambiguite d'instant d'echantillonnage.
+//
+// A CONFIRMER : ces deux points viennent de l'affichage du serveur, arrondi a
+// une decimale. Le rapport est solide, la troisieme decimale ne l'est pas.
+#define MEAS_V1_GAIN_V_PER_V     29.27f   // broche 16, [V0.2]
+
+// [V0.1] NON VERIFIEES SUR V0.2.
+// VIN : ecart d'environ 1 % constate sur V0.2 (19,93 V lus 19,7 ; 24,18 V lus
+// 24,0). Les deux points donnent 11,036 et 10,991 -- ils ne se recoupent pas
+// assez pour separer un gain d'un offset a la resolution de l'affichage. La
+// valeur theorique du pont etant 11,00, il est probable que V0.2 soit revenue
+// dessus, mais ce n'est PAS mesure. Reprendre sur la valeur brute de l'ADC.
+// VOUT : jamais reverifiee depuis le passage en V0.2.
 #define MEAS_VIN_GAIN_V_PER_V    10.909f  // broche 10, coef mesure 0,09
-#define MEAS_V1_GAIN_V_PER_V     30.82f   // broche 16, coef mesure 0,032
 #define MEAS_VOUT_GAIN_V_PER_V   181.82f  // broche 14, coef mesure 0,0055
 
 // ---- Courant d'entree (doc §2) --------------------------------------
+//
+// AVERTISSEMENT : tout le bloc de commentaire qui suit, jusqu'au marqueur
+// [V0.2], decrit la chaine ZXCT1109 de la carte V0.1. Il est conserve pour
+// la tracabilite du raisonnement, mais la VALEUR retenue est celle du
+// marqueur [V0.2] en fin de bloc. Archive : docs/calibration-V0.1.md.
 // Recale sur les deux memes points : 487 counts -> 620 mA et 335 -> 416 mA.
 // L'ancienne valeur de 1,2019 sous-estimait de 30 %, ce qui donnait des
 // rendements superieurs a 100 % -- c'est par la qu'on a trouve le probleme.
@@ -116,27 +164,68 @@
 //  - la carte de controle etant sur alimentation separee, rien ne
 //    contourne le shunt : l'amperemetre et le shunt voient bien le meme
 //    courant.
-#define MEAS_IIN_A_PER_V         1.214f
-#define MEAS_IIN_OFFSET_V        0.000f
-
-// EVOLUTION PREVUE : INA293A2 (gain 50) alimente en 3,3 V, shunt 0,01 ohm.
-// Basculer sur 2,000f LE JOUR OU la carte est modifiee, pas avant.
+// [V0.2] REFAITE. Tout le raisonnement ci-dessus porte sur le ZXCT1109 de la
+// V0.1 : il est ARCHIVE dans docs/calibration-V0.1.md et ne s'applique plus.
+// L'INA293A2 est monte sur V0.2, la chaine est entierement differente.
 //
 //   Vadc = 50 x 0,01 x I = 0,5 V/A   ->   I = Vadc x 2,000
 //
-// Gagnant sur les deux tableaux face au ZXCT1109 : l'offset d'entree de
-// quelques dizaines de microvolts vaut ~1,5 mA ramene au courant (contre
-// ~37 mA pour le courant d'offset de 3 uA du ZXCT1109 sur 0,02 ohm), et le
-// shunt deux fois plus petit dissipe deux fois moins -- 20 mW a 1,42 A.
+// Confirme au banc, en continu et PWM inhibe, sans faire d'hypothese sur le
+// shunt -- c'est la sortie de l'ampli qui est mesuree directement :
+//
+//   126 mV en sortie d'INA293A2 (gain 50) pour 0,27 A au multimetre
+//     -> Vshunt = 126/50 = 2,52 mV  ->  Rsense = 9,3 mOhm
+//   le shunt de 10 mOhm est donc bien celui monte, a 7 % pres (tolerance du
+//   shunt + resolution du multimetre sur un courant aussi faible).
+//
+// Recoupement independant, cote ADC : le serveur affichait 0,16 A avec
+// l'ancien gain de 1,214, soit Vadc = 132 mV -- a 5 % des 126 mV lus a
+// l'ampli. L'ADC lisait donc deja correctement la broche ; seule la constante
+// etait restee celle du ZXCT1109. Avec 2,000 : 0,264 A contre 0,27 A mesures.
+//
+// A CONFIRMER : un seul point, a courant faible (0,27 A). Un second point
+// vers 1 a 2 A verrouillerait l'absence d'offset, que la fiche de l'INA293
+// rend deja tres probable (~1,5 mA ramene au courant, contre ~37 mA pour le
+// ZXCT1109 qu'il remplace).
+// [V0.2] RECALE LE 17/08/2026 SUR MESURE, apres correction d'un defaut de
+// masse (deux alimentations non reliees) qui invalidait tous les releves
+// anterieurs -- y compris le point a 0,27 A qui semblait confirmer 2,000.
+//
+// La valeur de 2,000 etait THEORIQUE (50 x 0,010 ohm -> 0,5 V/A). Mesure au
+// point de fonctionnement, elle fait lire 12 % trop haut :
+//
+//   offset : carte alimentee, RUN=0, CHARGE DEBRANCHEE (indispensable ici :
+//            charge branchee le courant passe encore par L et la diode, donc
+//            par le shunt d'entree, contrairement au shunt de I1 qui est
+//            dans la source du MOSFET et ne voit rien a RUN=0)
+//            -> 0,00 a 0,02 A, soit ~5 mV. Negligeable, retenu a zero.
+//
+//   gain   : 0,97 A au multimetre affiches 1,05 a 1,15 A (centre 1,10)
+//            -> 2,000 x 0,97 / 1,09 = 1,78 A/V
+//
+// Soit 0,562 V/A au lieu de 0,5 theoriques : 11,2 mOhm effectifs pour un
+// shunt de 10 mOhm. Le meme exces d'une dizaine de pour cent que sur I1, et
+// probablement la meme cause -- du cuivre inclus dans la boucle de mesure.
+//
+// UN SEUL POINT, et la lecture y bat de +/-4,5 % pour une raison non
+// elucidee (le RC 1k/10nF est pourtant en place). A confirmer par plusieurs
+// points obtenus en faisant varier V1 sur la charge de 100 ohms : 30, 35, 40
+// et 46 V donnent environ 0,41 / 0,55 / 0,73 / 0,97 A, de quoi ajuster une
+// droite sans aucune charge supplementaire.
+//
+// Sans consequence pour la securite : IIN ne pilote aucune protection. Elle
+// sert a la telemetrie et au repliement de puissance (LIM), pas encore
+// implemente.
+#define MEAS_IIN_A_PER_V         1.78f    // [V0.2] mesure, un seul point
+#define MEAS_IIN_OFFSET_V        0.000f   // [V0.2] mesure : ~5 mV, negligeable
+
+// RAPPEL MATERIEL : contrairement au ZXCT1109 qui se nourrissait de la ligne
+// mesuree, l'INA293A2 exige une alimentation separee de 2,7 a 5,5 V.
+// Le rail 3,3 V doit donc lui parvenir -- et etre protege (TVS 3,6 V).
 //
 // Pleine echelle 6,6 A, environ 6,4 A utiles (la sortie ne monte pas tout a
 // fait au rail). Resolution 1,6 mA par LSB, soit l'ordre de grandeur de
 // l'offset : inutile de chercher plus fin.
-//
-// ATTENTION : contrairement au ZXCT1109 qui se nourrit de la ligne mesuree,
-// l'INA293 exige une alimentation separee de 2,7 a 5,5 V. Le rail 3,3 V doit
-// donc lui parvenir -- et etre protege (TVS 3,6 V).
-// #define MEAS_IIN_A_PER_V      2.000f
 
 // ---- Courant de sortie (doc §4) -------------------------------------
 // NON MESURE : valeur theorique de conception (3,0 V @ 50 mA).
@@ -167,10 +256,138 @@
 // donc la seule partie non reverifiee de cette chaine. Les deux voies
 // different d'environ 1 %, garder deux jeux de constantes, ne jamais
 // moyenner.
-#define MEAS_I1_OFFSET_V         0.0f
-#define MEAS_I1_GAIN_V_PER_A     0.631f
+// GAIN DE I1 MESURE, enfin -- il n'etait jusqu'ici que calcule (0,02 ohm x
+// 31,3), et faux de 29 %. La mesure n'etait pas possible avec les TLV9151 :
+// a 144 kHz de bande passante en boucle fermee ils n'avaient pas fini de
+// monter a l'instant d'echantillonnage. Le TSV791 (50 MHz, tau = 100 ns)
+// restitue la rampe fidelement, et la voie devient etalonnable.
+//
+// METHODE, et c'est elle qui compte : en conduction continue, le courant
+// d'inductance A MI-CONDUCTION vaut exactement le courant d'entree. Aucune
+// hypothese sur L, sur le shunt ou sur le gain de l'ampli.
+//
+//   Iin (amperemetre)            2,58 A
+//   V a mi-conduction (scope)    2,072 V
+//   ligne de base hors conduction  -0,034 V
+//   -> (2,072 + 0,034) / 2,58 =  0,816 V/A
+//
+// Contre-verification : le firmware annoncait 3,33 A, soit 2,10 V avec son
+// ancienne constante -- exactement la tension lue au scope. Le firmware et
+// l'oscilloscope voyaient donc la meme chose, seule la constante etait fausse.
+//
+// NE PAS utiliser la methode par la PENTE : dV/dt = gain x Vin/L confond le
+// gain avec l'inductance reelle, connue a +/-20 % au mieux (tolerance, plus
+// la derive en courant continu). Deux tentatives ont donne 0,62 puis 0,73.
+//
+// D'OU VIENNENT LES 29 % ? Pas elucide. 0,816/31,3 = 25,9 mOhm de resistance
+// effective pour 20 nominaux. La ligne de base negative signale bien du
+// cuivre partage entre l'extremite froide du shunt et le chemin de retour,
+// mais 34 mV n'en representent que 0,4 mOhm -- loin des 6 manquants. Reste
+// donc a verifier a l'ohmmetre la valeur reelle du shunt et du reseau Rf/Rg.
+// Tant que ce n'est pas fait, MEAS_I2_GAIN_V_PER_A est suspecte du meme
+// ecart : meme schema, memes references.
+//
+// PROVISOIRE : un seul point de fonctionnement. VIN s'est ecartee de 3 % au
+// meme releve alors qu'elle etait juste a 0,2 % au precedent -- le repliement
+// residuel redistribue les erreurs entre voies quand le rapport cyclique
+// change. A confirmer a une autre consigne.
+// [V0.2] LES DEUX ETAGES N'ONT PLUS LE MEME SHUNT. C'est le point a retenir :
+// I1 est passe a 0,01 ohm, I2 est reste a 0,02 ohm. Toute formule, tout seuil
+// et tout raisonnement qui les traitait comme identiques est a revoir.
+//
+// I1 [V0.2] MESURE, directement en sortie d'ampli, sans hypothese sur le
+// shunt ni sur Rf/Rg :
+//
+//   10 A -> 3,40 V   ->   0,34 V/A   (soit 0,010 ohm x G_ampli 34)
+//
+// Pleine echelle : 3,3 / 0,34 = 9,7 A. Le domaine d'exploitation vise est
+// 3 A moyen / 6 A crete, largement dedans. C'est la raison d'etre du
+// changement : l'ancienne chaine plafonnait a 4,04 A, ce qui interdisait la
+// pleine puissance en dessous de 19 V d'entree (cf. hardware.md).
+//
+// I2 [V0.1] TOUJOURS JAMAIS MESURE. Le shunt est reste a 0,02 ohm. SI le
+// reseau Rf/Rg est le meme que sur I1 (G = 34), le gain vaudrait 0,68 V/A --
+// c'est une DEDUCTION, pas une mesure, et la valeur ci-dessous est celle,
+// non mesuree elle aussi, qui datait de V0.1. Elle est conservee parce
+// qu'elle est PLUS BASSE que la deduction : le code DAC qui en decoule fait
+// declencher plus tot, ce qui est le sens sur de l'erreur.
+// A mesurer comme I1 avant de peupler l'etage 2.
+// [V0.2] GAIN MESURE LE 17/08/2026, PAR DEUX ROUTES INDEPENDANTES.
+//
+// Point de mesure : Vin 24,1 V, V1 45,42 V, I_in 0,97 A (multimetre), charge
+// 100 ohms, L = 47 uH, F = 200,91 kHz. Sortie d'ampli au scope, voie C1.
+//
+//  A) par la moyenne. Le shunt etant dans la SOURCE du MOSFET, il ne voit le
+//     courant que pendant la conduction, et le rapport de ce courant moyen au
+//     courant d'entree ne depend QUE des tensions -- ni de L, ni du rapport
+//     cyclique, ni du mode de conduction (en CCM parce que D = (V1-Vin)/V1,
+//     en DCM parce que l'equilibre des volt-secondes donne le meme rapport
+//     t_on/(t_on+t_fall)) :
+//         gain = moyenne x V1 / (I_in x (V1 - Vin))
+//     La moyenne se tire des deux valeurs affichees par l'instrument,
+//     sans lecture graphique :  moyenne = racine(DC_RMS^2 - AC_RMS^2)
+//         racine(444,38^2 - 358,47^2) = 262,6 mV
+//         0,2626 x 45,42 / (0,97 x 21,32) = 0,577 V/A
+//
+//  B) par l'amplitude de la rampe, qui n'utilise NI I_in NI le rendement :
+//         dI = Vin x t_on / L = 24,1 x 2,336 us / 47 uH = 1,198 A
+//         gain = dV / dI = 0,68 / 1,198 = 0,568 V/A
+//
+// Deux chemins sans grandeur commune, 1,6 % d'ecart. Retenu : 0,57 V/A.
+//
+// CE QUI A FAIT ERRER AVANT (a ne pas refaire) : la valeur precedente de
+// 0,34 V/A venait d'une injection a 10 A lue 3,40 V. Or la pleine echelle de
+// la chaine est de 3,3/0,57 = 5,8 A : a 10 A l'amplificateur etait en butee,
+// et 3,40 V etait le rail. Diviser une tension de saturation par le courant
+// qui l'a provoquee ne donne pas un gain. Toute reprise doit se faire AU
+// POINT DE FONCTIONNEMENT, jamais par injection hors gamme.
+//
+// RESTE OUVERT : 0,57 / 34 = 16,8 mOhm alors que le shunt est un 10 mOhm a
+// 1 %. Le gain bout-en-bout est ce qui compte ici et il est mesure deux fois,
+// mais ce facteur 1,7 dans la decomposition signifie qu'un element du chemin
+// de mesure n'est pas ce que dit le schema. A elucider.
+//
+// OFFSET MESURE le 17/08/2026, carte alimentee et RUN=0, donc aucun courant
+// dans le shunt. Deux releves : 0,06 A charge branchee, 0,05 A charge
+// debranchee -- soit 0,055 x 0,57 = 31 mV ramenes a la sortie de l'ampli.
+//
+// Que les deux coincident est attendu et rassurant : a RUN=0 le MOSFET est
+// bloque, le shunt de SOURCE ne voit donc aucun courant dans les deux cas.
+// C'est bien un offset de chaine, constant, et non un effet du point de
+// fonctionnement. L'ecart de 0,01 A est la resolution de l'affichage.
+//
+// C'est, au millivolt pres, la "ligne de base negative de -34 mV" deja
+// relevee sur V0.1 : le meme defaut a survecu a la revision de carte. Il
+// merite d'etre compris plutot que compense indefiniment -- l'hypothese
+// avancee en V0.1 etait du cuivre partage entre l'extremite froide du shunt
+// et le chemin de retour.
+//
+// HYPOTHESE A CONFIRMER : la conversion suppose que le firmware tournait
+// deja avec MEAS_I1_GAIN_V_PER_A = 0,57. S'il portait encore 0,34, l'offset
+// vaut 19 mV et non 31. L'ecart est sans consequence pratique (12 mV devant
+// les 262 mV du signal et les 2,28 V du seuil), mais la valeur est a
+// reprendre si la mesure est refaite.
+//
+// Effet sur la protection : SAFETY_DAC_CODE_STAGE1 ajoute cet offset au
+// seuil, qui represente donc bien 4,0 A AU-DESSUS de la ligne de base, et
+// non 4,0 A comptes depuis zero volt. C'est le comportement voulu.
+// AFFINE LE 18/08/2026 apres ajout d'un RC d'entree 1 kOhm / 100 pF sur
+// l'ampli (tau = 100 ns) : la bosse d'etablissement de ~1 us a disparu, la
+// rampe est lineaire des la sortie du front, et l'etalonnage est enfin fait
+// sur un signal propre. Le RC n'a pas change le gain -- il a rendu sa mesure
+// possible. Point : Vin 24,1 V, V1 45,42 V, I_in 1,00 A, charge 100 ohms.
+//
+//   Route A (moyenne)  : (0,3045 - 0,031) x 45,42 / (1,00 x 21,32) = 0,583
+//   Route B (curseur a mi-conduction, ou i_L vaut EXACTEMENT I_in, sans
+//            aucune hypothese sur L ni sur le mode de conduction) :
+//                        (0,613 - 0,031) / 1,00 = 0,582
+//
+// Validation croisee de la mesure elle-meme : le rapport cyclique lu sur la
+// grille (C2 PosDuty = 46,62 %) tombe a 0,3 % de (V1-Vin)/V1 = 46,94 %.
+#define MEAS_I1_OFFSET_V         0.031f  // [V0.2] mesure a RUN=0
+#define MEAS_I1_GAIN_V_PER_A     0.58f   // [V0.2] mesure, deux routes
 #define MEAS_I2_OFFSET_V         0.0f
-#define MEAS_I2_GAIN_V_PER_A     0.637f
+#define MEAS_I2_GAIN_V_PER_A     0.637f  // [V0.1] JAMAIS mesure, cf. ci-dessus
 
 // ---- NTC B57451V5103J062 (PROMPT §5) --------------------------------
 // Montage : 3,3 V -- NTC -- R_fixe -- 0 V, mesure au point milieu.
@@ -202,9 +419,98 @@
 // futur passage au TLV9151 ne touchera que les constantes ci-dessus.
 //
 // Formule TI : V = DACVAL * (VDDA - VSSA) / 1023  -> 1023, pas 4096.
-// Seuil nominal (PROMPT §5). Le declenchement a ete valide au banc a 1,5 A
-// (courant injectable), puis le seuil remis a sa valeur de service.
-#define SAFETY_ISHUNT_THRESHOLD_A   3.0f
+// Le declenchement a ete valide au banc a 1,5 A (courant injectable), puis le
+// seuil remis a sa valeur de service.
+//
+// PORTE DE 3,0 A 4,5 A. Le comparateur surveille le courant INSTANTANE dans
+// le shunt, donc le SOMMET de la rampe d'inductance, pas sa moyenne :
+//
+//   I_crete = I_moyen + Vin x D / (2 x L x f)
+//
+// A 50 W sous 22,4 V le crete atteint deja 3,01 A -- le seuil de 3,0 A etait
+// donc SOUS le courant de fonctionnement nominal. Ce n'etait plus une
+// protection mais une limite d'exploitation, et elle se manifestait par des
+// declenchements a 42 ohms de charge.
+//
+//   Vin      I_moyen   dI c-a-c   I_crete
+//   22,4 V    2,40 A    1,22 A     3,01 A
+//   15,0 V    3,50 A    1,08 A     4,04 A
+//   13,5 V    3,90 A    1,02 A     4,41 A   <- limite du seuil retenu
+//   10,0 V    5,26 A    0,83 A     5,68 A   <- HORS PORTEE, voir ci-dessous
+//
+// PLAFOND DE LA CHAINE DE MESURE, et c'est lui qui tranche. Il s'est
+// effondre quand le gain reel a ete mesure :
+//
+//   suppose : 0,02 ohm x 31,3 = 0,626 V/A  ->  pleine echelle 5,3 A
+//   MESURE  :                    0,816 V/A  ->  pleine echelle 4,04 A
+//
+// Le seuil ne peut donc PAS depasser ~3,9 A, saturation de l'ampli comprise.
+// Retenu : 3,5 A, ce qui reproduit exactement le point de declenchement
+// valide au banc a 50 W -- l'ancien reglage de "4,5 A" avec l'ancien gain
+// produisait un code DAC de 2,84 V, soit 3,48 A reels. Rien ne change sur la
+// carte, le chiffre est simplement devenu honnete.
+//
+//   Vin      I_moyen   dI c-a-c   I_crete    marge sous 3,5 A
+//   22,4 V    2,40 A    1,22 A     3,01 A         16 %
+//   15,0 V    3,50 A    1,08 A     4,04 A     DECLENCHE
+//
+// PLEINE PUISSANCE SEULEMENT AU-DESSUS DE ~19 V D'ENTREE. En dessous, le
+// courant crete d'un fonctionnement a 50 W depasse ce que la chaine sait
+// restituer : aucun seuil ne peut y etre place, la mesure sature avant.
+//
+// [V0.2] LE TABLEAU CI-DESSUS EST PERIME. Le shunt de l'etage 1 est passe a
+// 0,01 ohm et la chaine a 0,34 V/A : la pleine echelle monte de 4,04 A a
+// 9,7 A, et la limite "pleine puissance seulement au-dessus de 19 V" tombe.
+// A 10 V d'entree, 50 W donnent 5,68 A crete -- desormais mesurables, avec
+// un seuil placable au-dessus. Le repliement de puissance (tag LIM) n'est
+// donc plus necessaire POUR CETTE RAISON.
+//
+// SEUIL RELEVE DE 3,5 A A 7,0 A. Ce n'est pas un confort, c'est une
+// obligation : le domaine d'exploitation vise est 3 A moyen / 6 A CRETE, et
+// le comparateur surveille le courant INSTANTANE. Laisser 3,5 A avec le
+// nouveau gain ferait declencher la protection en fonctionnement normal.
+//
+//   etage 1 : 7,0 x 0,34  = 2,38 V  ->  code DAC 738   (< 1023, pas d'ecretage)
+//
+// A CONFIRMER, et ce n'est pas une question de mesure : 7,0 A crete doit
+// rester sous la SOA du NTD100N70GN1 ET sous le courant de saturation de
+// l'inductance -- valeur qui n'est toujours pas tranchee (47 ou 100 uH).
+// C'est la seule constante de ce fichier qui se choisisse a partir des
+// fiches des composants et non d'une mesure au banc.
+//
+// PIEGE PROPRE AUX DEUX SHUNTS DIFFERENTS : cette constante est UNIQUE mais
+// ne represente plus le meme courant sur les deux etages, puisque chaque
+// SAFETY_DAC_CODE_STAGEx applique le gain de SON etage. Avec un I2 deduit a
+// 0,68 V/A, 7,0 A demanderait 4,76 V : au-dela de la reference du DAC, donc
+// ECRETE A 1023 par SAFETY_DAC_CODE_FROM_V -- l'etage 2 declencherait en
+// realite vers 4,9 A, silencieusement. Sans consequence tant que l'etage 2
+// n'est pas peuple ; a traiter en scindant la constante en deux (une par
+// etage) le jour ou il le sera.
+// ABAISSE DE 7,0 A 4,0 LE 17/08/2026, ET CE N'ETAIT PAS UN REGLAGE DE
+// CONFORT : AVEC LE GAIN MESURE, 7,0 A DESACTIVAIT LA PROTECTION.
+//
+//   7,0 A x 0,57 V/A = 3,99 V  >  SAFETY_DAC_VREF_V (3,3 V)
+//
+// SAFETY_DAC_CODE_FROM_V ecrete alors a 1023, soit un seuil place a 3,3 V --
+// que l'amplificateur, qui sature vers 3,2 V, N'ATTEINT JAMAIS. Le
+// comparateur ne pouvait donc plus basculer, sur aucun courant. C'est le
+// piege decrit ci-dessus pour l'etage 2, qui s'appliquait en fait a l'etage 1
+// sans que rien ne le signale : ni defaut, ni LED, ni trace en telemetrie.
+// Une protection muette ressemble en tout point a une protection qui n'a pas
+// eu a se declencher.
+//
+// Le 7,0 lui-meme decoulait du gain errone de 0,34 V/A (injection a 10 A en
+// pleine saturation, cf. MEAS_I1_GAIN_V_PER_A) : il avait ete choisi pour
+// couvrir une pleine echelle supposee de 9,7 A, qui n'a jamais existe.
+//
+// CHOIX DE 4,0 A, avec le gain reel :
+//   seuil au DAC   4,0 x 0,57 = 2,28 V  ->  code 707, sous 1023, pas d'ecretage
+//   pleine echelle 3,3 / 0,57 = 5,8 A   ->  le seuil est atteignable
+//   a 50 W, le courant crete atteint ~2,9 A  ->  38 % de marge
+//
+// A revoir si la puissance de travail augmente : le plafond utile est
+// d'environ 5 A, au-dela l'ampli sature avant le comparateur.
+#define SAFETY_ISHUNT_THRESHOLD_A   4.0f    // [V0.2] crete, cf. ci-dessus
 #define SAFETY_DAC_VREF_V           3.3f
 
 // Qualification du comparateur : nombre d'echantillons SYSCLK consecutifs
@@ -227,8 +533,14 @@
 // SYNCHRONISEE du comparateur. En asynchrone, ce champ est sans effet.
 #define SAFETY_COMP_QUALSEL         31U
 
-#define SAFETY_DAC_CODE_FROM_V(v_) \
-    ((uint16_t)((v_) / SAFETY_DAC_VREF_V * 1023.0f + 0.5f))
+// ECRETAGE OBLIGATOIRE. DACVAL est un champ de 10 bits : un code superieur a
+// 1023 y est TRONQUE, pas sature. Un seuil de 3,67 V donnerait 1138, tronque
+// a 114, soit un declenchement des 0,45 A -- l'inverse de l'effet voulu.
+// C'est arrive en relevant MEAS_I1_GAIN_V_PER_A de 0,631 a 0,816.
+#define SAFETY_DAC_CODE_FROM_V(v_)                                        \
+    ((uint16_t)(((v_) >= SAFETY_DAC_VREF_V)                               \
+                    ? 1023.0f                                             \
+                    : ((v_) / SAFETY_DAC_VREF_V * 1023.0f + 0.5f)))
 
 // Seuil ramene a la sortie de l'ampli : Vadc = offset + I * gain.
 #define SAFETY_DAC_CODE_STAGE1                                            \
@@ -283,10 +595,14 @@
 
 // Placement du declenchement, en counts avant le milieu de la conduction.
 //
+// Un essai de decalage aux TROIS QUARTS a ete tente puis ANNULE le
+// 17/08/2026 : il destabilisait la regulation. Motif detaille dans
+// pwm_apply_adc_trigger() (pwm.c) -- a lire avant de retenter.
+//
 // On centre sur I1 SEULE, et non sur le groupe des quatre voies rapides.
 // Seul terme retenu : la fenetre d'acquisition, l'ADC echantillonnant a sa
 // FIN. I1 etant en tete de sequence, son instant d'echantillonnage tombe
-// alors exactement au milieu de la conduction.
+// alors exactement sur le point vise.
 //
 // La version precedente centrait le GROUPE, ce qui rejetait I1 1,5 creneau
 // en avance -- 250 ns apres l'amorcage a D = 0,43, en pleine transition.
@@ -309,7 +625,7 @@
 // pour l'avertissement de securite. A 1, la DUREE DE L'ISR ADC est marquee
 // sur HV_EN et bsp_gpio.c neutralise hv_enable_set().
 // REMETTRE A 0 AVANT TOUT ESSAI EN TENSION.
-#define ADC_TIMING_PROBE   1
+#define ADC_TIMING_PROBE   0
 
 // =====================================================================
 // Regulation et bornes d'exploitation
@@ -342,6 +658,30 @@
 // mesure ne sature jamais avant que la protection n'agisse.
 #define CTRL_V1_OV_TRIP_V        55.0f
 #define CTRL_VOUT_OV_TRIP_V     520.0f
+
+// ---- Sous-tension d'entree ------------------------------------------
+// Tension d'entree minimale de conception : 10 V. En dessous, defaut
+// verrouille et coupure du PWM, comme pour une survoltage.
+//
+// Le seuil est place 0,5 V SOUS le minimum annonce. A 10 V pile, l'ondulation
+// d'entree et le creux d'un echelon de charge feraient sinon tomber un defaut
+// dont on ne sort qu'en coupant l'alimentation.
+#define CTRL_VIN_UV_TRIP_V        9.5f
+
+// ARMEMENT. Au demarrage VIN traverse forcement la zone basse pendant la
+// montee de l'alimentation : surveiller des le reset rendrait la carte
+// impossible a demarrer. La surveillance ne s'arme donc qu'apres que VIN a
+// une fois depasse ce seuil, et elle le reste jusqu'au prochain reset.
+#define CTRL_VIN_UV_ARM_V        12.0f
+
+// ANTI-REBOND. Nombre de sequences ADC consecutives sous le seuil avant de
+// verrouiller. 5 a 66,7 kHz font 75 us, soit quinze periodes de decoupage :
+// une ondulation ne peut pas y survivre, un vrai effondrement si.
+//
+// Ce n'est pas du filtrage qui masque le probleme -- c'est de l'anti-rebond
+// sur une protection VERROUILLANTE, dont un declenchement intempestif coute
+// un cycle d'alimentation complet.
+#define CTRL_VIN_UV_COUNTS        5U
 
 // ---- Limites de rapport cyclique ------------------------------------
 // duty max < 1 imperativement : a 500 V depuis 35 V il faut deja D = 0,93,

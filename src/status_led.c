@@ -28,6 +28,14 @@
 #define OVERVOLT_PERIOD       30U // 0,3 s
 #define OVERVOLT_ON           15U // 0,15 s
 
+// Sous-tension d'entree : DOUBLE CLIGNOTEMENT rouge. Les trois cadences
+// simples etant deja prises (fixe, lent, rapide), un quatrieme rythme ne
+// serait plus discernable a l'oeil -- on change donc de forme, pas de vitesse.
+#define UNDERVOLT_PERIOD     120U // 1,2 s
+#define UNDERVOLT_FLASH1_OFF  10U // 0,0 -> 0,1 s allume
+#define UNDERVOLT_FLASH2_ON   20U // 0,2 -> 0,3 s allume
+#define UNDERVOLT_FLASH2_OFF  30U
+
 static led_state_t s_state = LED_STATE_STARTUP;
 static uint16_t s_phase = 0;         // position dans le motif courant
 static uint16_t s_startup_hold = STARTUP_MIN_TICKS;
@@ -100,6 +108,11 @@ void status_led_tick(void)
         on_time = OVERVOLT_ON;
         break;
 
+    case LED_STATE_UNDERVOLTAGE:
+        period = UNDERVOLT_PERIOD;
+        on_time = UNDERVOLT_FLASH1_OFF; // le motif est detaille plus bas
+        break;
+
     default: // STARTUP et OVERCURRENT : niveau fixe, pas de motif
         period = 1U;
         on_time = 1U;
@@ -127,6 +140,14 @@ void status_led_tick(void)
     case LED_STATE_OVERTEMP:
     case LED_STATE_OVERVOLTAGE:
         red = (s_phase < on_time);
+        break;
+
+    case LED_STATE_UNDERVOLTAGE:
+        // Deux eclats brefs puis une longue pause. Uniquement des
+        // comparaisons, conformement a la discipline d'ISR.
+        red = (s_phase < UNDERVOLT_FLASH1_OFF)
+              || ((s_phase >= UNDERVOLT_FLASH2_ON)
+                  && (s_phase < UNDERVOLT_FLASH2_OFF));
         break;
 
     case LED_STATE_OVERCURRENT:

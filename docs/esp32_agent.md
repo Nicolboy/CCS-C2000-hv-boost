@@ -205,6 +205,39 @@ seuls — l'IHM peut les afficher différemment (par exemple sans les
 traiter comme aussi critiques qu'un défaut verrouillé), mais ce n'est pas
 une obligation stricte, à confirmer selon le rendu voulu.
 
+**Le code 9 (sous-tension d'entrée) est VERROUILLÉ**, au même titre que
+2-7 — il a été ajouté au firmware TMS320 après la rédaction initiale de ce
+document et n'y figurait pas. Une IHM qui le traiterait comme transitoire
+attendrait indéfiniment un retour spontané à `FAULT=0`. Table complète et
+motif de ce défaut : `tms320_agent.md`.
+
+À vérifier côté ESP32 : le traitement des codes est-il fait par une liste
+explicite (`2..7`) ou par un test `>= 2` ? Dans le premier cas, **le code 9
+tombe aujourd'hui dans la branche « transitoire » ou « inconnu »** — c'est
+le comportement à corriger.
+
+### Repliement de puissance — tag `LIM`
+
+Nouveau tag en tête de trame, à parser dès que le TMS320 l'émettra
+(**pas encore implémenté côté TMS320**) : `0` = pas de limitation, `1` =
+plafond 50 W actif, `2` = plafond 25 W actif.
+
+**Ce n'est pas un défaut** : `FAULT` reste à `0`, `STATE` à `4`, la
+régulation tourne. L'IHM ne doit donc **pas** le présenter comme une
+alarme, ni le mélanger à l'affichage de `FAULT`.
+
+Elle doit en revanche l'afficher **explicitement et en permanence** quand
+il est actif. Sans cela, l'opérateur voit une tension stable sous sa
+consigne, avec `FAULT=0` et `STATE=4`, et n'a aucun moyen de savoir si la
+boucle est mal réglée ou si le duty est simplement bridé. C'est le même
+piège que `REJ` : une information manquante rend un fonctionnement normal
+indéchiffrable.
+
+Ne **pas** recalculer `LIM` côté ESP32 à partir de `VIN`, même si la règle
+paraît triviale : l'hystérésis sur le seuil de 20 V rend la valeur
+dépendante de l'historique. Le TMS320 reste la seule source de vérité,
+comme pour les bornes de consigne.
+
 ### Icône danger HT : pilotée uniquement par `VOUT`
 
 L'avertissement haute tension doit dépendre **uniquement** de la valeur
@@ -248,11 +281,15 @@ Sérialisation JSON de la dernière trame `$T` reçue, augmentée de
   "v1": 34.8, "i1": 0.62, "t1": 38.4,
   "vout": 399.7, "i2": 0.087, "t2": 36.1,
   "iout": 0.0224,
-  "fault": 0, "state": 4,
+  "fault": 0, "state": 4, "lim": 0,
   "v1_sp": 35.0, "vout_sp": 400.0, "rej": 0,
   "link_ok": true, "age_ms": 180
 }
 ```
+
+`lim` : repliement de puissance actif (`0`/`1`/`2`, voir plus haut).
+Relayer la valeur reçue telle quelle ; tant que le TMS320 ne l'émet pas,
+renvoyer `0`. **Ne pas la déduire de `vin`.**
 
 ### `POST /api/setpoint`
 

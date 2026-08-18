@@ -24,7 +24,8 @@ typedef enum
     LED_STATE_EMUSTOP,
     LED_STATE_OVERTEMP,
     LED_STATE_OVERCURRENT,
-    LED_STATE_OVERVOLTAGE
+    LED_STATE_OVERVOLTAGE,
+    LED_STATE_UNDERVOLTAGE
 } led_state_t;
 
 void status_led_init(void);

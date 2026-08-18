@@ -35,24 +35,82 @@ static uint16_t stage_index(stage_id_t stage)
     return (stage == STAGE_1) ? 0U : 1U;
 }
 
-// Place CMPB de sorte que le GROUPE des quatre voies critiques de l'ADC soit
-// centre sur le milieu de la conduction du MOSFET (voir adc.c et adc.h).
+// Place CMPB, qui declenche la sequence ADC, au MILIEU de la conduction du
+// MOSFET. La conduction va de CTR=0 a CMPA, le point vise est donc CMPA>>1.
 //
-// La conduction va de CTR=0 a CMPA : son milieu est CMPA>>1. On declenche
-// ADC_TRIG_LEAD_COUNTS plus tot, ce qui couvre deux choses -- la fenetre
-// d'acquisition, puisque l'ADC echantillonne a sa FIN, et le demi-etalement
-// du groupe, pour que ce soit son milieu et non sa premiere voie qui tombe au
-// bon endroit. Sans ce second terme les trois dernieres voies deriveraient
-// vers le blocage, ce qui est exactement ce qu'on cherche a eviter.
+// ADC_TRIG_LEAD_COUNTS avance le declenchement de la fenetre d'acquisition,
+// l'ADC echantillonnant a sa FIN. I1 etant en tete de sequence, son instant
+// d'echantillonnage tombe alors bien au point vise.
 //
 // Uniquement un decalage, une soustraction et une comparaison : appelable
 // depuis l'ISR ADC sans enfreindre la regle "ni multiplication ni division".
-// ADC_TRIG_LEAD_COUNTS est une constante evaluee a la compilation.
 //
 // A duty faible le groupe deborde sur le blocage -- limite structurelle
 // documentee dans adc.h, pas un defaut de reglage. La protection contre les
 // surintensites n'en depend pas : elle passe par les comparateurs
-// analogiques, en continu.
+// analogiques, en continu, et n'echantillonne jamais.
+//
+// ---------------------------------------------------------------------
+// ESSAI DU 17/08/2026 AUX TROIS QUARTS : ANNULE.
+//
+// Motif de l'essai : au scope (200,85 kHz, duty 38,1 %), la sortie de l'ampli
+// de shunt met environ 1 us a s'etablir apres l'amorcage -- pointe a
+// -149,84 V/us sur le front, puis une bosse et un creux avant la rampe
+// propre. A mi-conduction (949 ns dans ce cas) l'ADC echantillonne donc dans
+// ce transitoire, et I1 lit environ 15 % SOUS le courant d'entree.
+//
+// Cette microseconde n'est PAS la commutation du MOSFET : a 46 V et 1 A, une
+// transition de 1 us dissiperait 4,6 W a 200 kHz, soit plus du double des
+// 1,9 W de pertes totales mesurees. C'etait la chaine de mesure qui
+// s'etablissait : l'ampli, depourvu de toute resistance serie en entree,
+// encaissait la pointe L.di/dt du shunt en direct. RESOLU le 18/08/2026 par
+// un RC d'entree 1 kOhm / 100 pF (tau = 100 ns, contre 530 ns de QUALSEL
+// deja assumes) -- la rampe est lineaire des la sortie du front.
+//
+// ---------------------------------------------------------------------
+// ECART RESIDUEL SUR L'INSTANT REEL D'ECHANTILLONNAGE -- non elucide.
+//
+// Le code vise la mi-conduction : CMPB = CMPA/2 - ADC_TRIG_LEAD_COUNTS, et
+// I1 etant en tete de sequence, sa fenetre d'acquisition se referme donc a
+// CMPA/2. Mesure au banc (18/08/2026, Vin 24,1 V, V1 45,42 V, I_in 1,00 A,
+// L 47 uH) : I1 remonte 1,23 A, soit 0,731 V a la broche, soit un courant de
+// 1,207 A -- alors que la mi-conduction vaut exactement I_in = 1,00 A. Sur
+// une rampe de 0,405 a 1,595 A, cela place l'echantillon aux ENVIRON DEUX
+// TIERS de la conduction, soit ~400 ns plus tard que vise.
+//
+// Le RC d'entree ne l'explique pas : sur une rampe, un retard de 100 ns fait
+// lire PLUS BAS, pas plus haut. Piste restante : latence de declenchement
+// entre l'evenement SOC de l'ePWM et l'ouverture reelle du S/H.
+//
+// CONSEQUENCE, A CONNAITRE ET A NE PAS PRENDRE POUR UNE PANNE : I1 remonte
+// systematiquement ~20 % AU-DESSUS du courant d'entree. Ce n'est pas une
+// erreur de gain -- le gain est mesure par deux routes concordantes -- c'est
+// l'endroit de la rampe qui est echantillonne. I1 NE DOIT DONC PAS ETRE
+// COMPARE A IIN. Sans consequence pour la securite : la protection est
+// analogique et continue, elle n'echantillonne jamais. Deplacer ce point ne decale
+// pas seulement I1, il decale LES NEUF VOIES de la sequence, qui s'enchainent
+// a 550 ns d'intervalle. A D = 0,478 (conduction 2,39 us) V1 passait de
+// 0,65 us AVANT le blocage a 50 ns avant : la variable regulee tombait sur le
+// front d'extinction. Constate au banc dans la minute : le rapport cyclique
+// s'est mis a osciller, et avec lui le courant d'entree.
+//
+// Le bouclage est direct : bruit de commutation sur V1 -> l'integrateur
+// corrige -> le duty bouge -> le front se deplace -> le bruit change.
+//
+// LEÇON A RETENIR. Un seul point de declenchement (CMPB) sert toute la
+// sequence, et les quatre voies rapides occupent 132 counts alors que la
+// conduction n'en dure que ~143 a ce rapport cyclique : il n'y a pas de place
+// pour placer I1 ailleurs qu'au debut sans expulser les autres. Tant que
+// l'ADC est declenche par un compare unique, l'instant de I1 et celui de V1
+// ne sont pas reglables separement.
+//
+// I1 lit donc environ 15 % sous le courant d'entree, l'echantillonnage
+// tombant dans l'etablissement de la chaine de mesure (~1 us apres
+// l'amorcage, releve au scope). C'EST ACCEPTE : I1 est une voie de
+// DIAGNOSTIC, la protection est analogique et continue, et elle
+// n'echantillonne jamais. On ne destabilise pas la regulation pour ameliorer
+// un affichage. Si la valeur doit etre juste, c'est le gain qu'il faut
+// etalonner A CET INSTANT-LA, pas l'instant qu'il faut deplacer.
 static void pwm_apply_adc_trigger(volatile struct EPWM_REGS *p)
 {
     uint16_t mid = (uint16_t)(p->CMPA.half.CMPA >> 1);

@@ -131,7 +131,8 @@ static fault_code_t compute_fault_code(const safety_faults_t *f)
         return FAULT_OVERCURRENT_I2;
     }
 
-    // Survoltage : detecte par control.c dans l'ISR, sur la valeur brute.
+    // Survoltage V1/VOUT et sous-tension VIN : detectes par control.c dans
+    // l'ISR ADC, sur les valeurs brutes. Le code remonte tel quel.
     ctrl_fault = control_get_fault();
     if (ctrl_fault != FAULT_NONE)
     {
@@ -199,6 +200,10 @@ static led_state_t compute_led_state(const safety_faults_t *f)
     // la LED sur le motif nominal alors que la puissance etait coupee et
     // verrouillee -- un affichage rassurant et faux, decouvert au banc apres
     // la destruction du MOSFET par surtension a vide.
+    if (control_get_fault() == FAULT_UNDERVOLTAGE_VIN)
+    {
+        return LED_STATE_UNDERVOLTAGE;
+    }
     if (control_get_fault() != FAULT_NONE)
     {
         return LED_STATE_OVERVOLTAGE;
@@ -219,7 +224,7 @@ static led_state_t compute_led_state(const safety_faults_t *f)
 }
 
 void main(void)
-{
+ {
 #ifdef _FLASH
     memcpy(&RamfuncsRunStart, &RamfuncsLoadStart, (size_t)&RamfuncsLoadSize);
 #endif

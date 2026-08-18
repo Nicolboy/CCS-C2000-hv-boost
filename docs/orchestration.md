@@ -78,6 +78,7 @@ consigne a réellement été acceptée, pas seulement lue depuis l'IHM :
   "iout": 0.0224,
   "fault": 0,
   "state": 4,
+  "lim": 0,
   "v1_sp": 35.0,
   "vout_sp": 400.0,
   "rej": 0,
@@ -149,11 +150,53 @@ l'incrément de `REJ`.
 | `1` (EMUSTOP) | auto-résolutif | Se relève seul, ne verrouille pas |
 | `8` (liaison perdue) | auto-résolutif | Se relève seul dès que la liaison revient |
 | `2`–`7` | verrouillés | Coupure définitive, cycle d'alimentation requis |
+| **`9`** (sous-tension VIN < 9,5 V) | **verrouillé** | Coupure définitive, cycle d'alimentation requis |
 
 Un orchestrateur qui interromprait une campagne sur **n'importe quel**
 `FAULT != 0` s'arrêterait à tort sur un simple hoquet UART. Seuls les
-codes `2` à `7` doivent être traités comme un arrêt définitif de la
-campagne en cours.
+codes `2` à `7` **et `9`** doivent être traités comme un arrêt définitif de
+la campagne en cours.
+
+Dans le code MCP plus bas, `FAULT_LATCHED = set(range(2, 8))` **n'inclut
+pas le 9** — il date d'avant l'ajout de ce défaut. Corriger en
+`set(range(2, 8)) | {9}`, faute de quoi une campagne continuerait de
+tourner à vide sur une alimentation coupée et verrouillée, en enregistrant
+des points tous identiques.
+
+---
+
+## Repliement de puissance : `LIM` — un point plafonné n'est pas un point libre
+
+Le TMS320 plafonne la puissance d'entrée selon la tension d'entrée : 50 W
+au-dessus de 20 V, **25 W en dessous**. Le champ `lim` de
+`/api/telemetry` le signale (`0` = libre, `1` = plafond 50 W, `2` = plafond
+25 W). Spécification complète : `tms320_agent.md`.
+
+**Ce n'est pas un défaut** — `fault` reste à `0`, `state` à `4`, la
+régulation tourne. Ne jamais interrompre une campagne dessus.
+
+Le piège est ailleurs, et il est sérieux pour une campagne de mesure :
+**sous plafond, la tension peut rester stable en dessous de sa consigne
+sans qu'aucun indicateur d'erreur ne se lève.** `wait_stable()` échouera
+alors en `timeout` sur un système qui fonctionne parfaitement, et un point
+relevé sous plafond n'est pas comparable à un point libre — le mélanger aux
+autres dans une courbe de rendement produit une discontinuité qu'on
+attribuera au convertisseur.
+
+Trois règles pour un orchestrateur :
+
+1. **Lire `lim` à chaque point et l'enregistrer avec la mesure.** Une
+   courbe doit pouvoir distinguer ses points plafonnés.
+2. **Ne pas mélanger dans une même courbe des points relevés à `lim`
+   différents**, en particulier de part et d'autre des 20 V d'entrée où le
+   plafond change d'un facteur 2.
+3. **En cas de `timeout` de `wait_stable()`, vérifier `lim` avant de
+   conclure à un défaut de réglage de boucle.** C'est la cause la plus
+   probable si l'entrée est basse.
+
+À ajouter dans `wait_stable()` : renvoyer `lim` dans le résultat, et
+distinguer le motif `"timeout"` du motif `"timeout_sous_plafond"` quand
+`lim != 0`.
 
 ---
 

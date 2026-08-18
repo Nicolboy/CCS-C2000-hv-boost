@@ -47,6 +47,32 @@ void bsp_gpio_control_init(void)
     // DISCHARGE = GPIO5 (broche 40)
     GpioCtrlRegs.GPAMUX1.bit.GPIO5 = 0;
     GpioCtrlRegs.GPADIR.bit.GPIO5 = 1;
+
+    // Broches libres 39 et 41 = GPIO4 et GPIO6, mises en ENTREE.
+    //
+    // ATTENTION -- LE F2802x N'A PAS DE PULL-DOWN INTERNE. Le silicium ne
+    // propose que des pull-UP, commandees par GPAPUD (1 = desactive). Le
+    // niveau bas au repos doit donc venir d'une RESISTANCE EXTERNE.
+    //
+    // On desactive le pull-up interne, actif au reset : sans cela il
+    // combattrait la resistance externe. Un pull-up interne de ~100 kOhm
+    // contre un pull-down externe de 10 kOhm donnerait bien un niveau bas
+    // valide, mais en consommant du courant en permanence et en degradant la
+    // marge de bruit pour rien.
+    //
+    // CONSEQUENCE A NE PAS MANQUER : dans cette configuration, une broche
+    // SANS pull-down externe FLOTTE. C'est pire que les deux etats definis.
+    // Si le pull-down externe n'est pas monte, remettre GPAPUD a 0 sur la
+    // broche concernee -- elle sera alors tiree au HAUT, mais definie.
+    //
+    // 10 kOhm est coherent avec les autres pull-down de la carte (entrees des
+    // portes ET, lignes PWM vers les drivers).
+    GpioCtrlRegs.GPAPUD.bit.GPIO4 = 1;
+    GpioCtrlRegs.GPAPUD.bit.GPIO6 = 1;
+    GpioCtrlRegs.GPAMUX1.bit.GPIO4 = 0;
+    GpioCtrlRegs.GPAMUX1.bit.GPIO6 = 0;
+    GpioCtrlRegs.GPADIR.bit.GPIO4 = 0; // entree
+    GpioCtrlRegs.GPADIR.bit.GPIO6 = 0; // entree
     EDIS;
 
     // Etat sur avant toute autre configuration. La decharge est laissee

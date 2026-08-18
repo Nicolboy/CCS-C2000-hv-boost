@@ -27,7 +27,8 @@ typedef enum
     FAULT_OVERTEMP_T2 = 5,
     FAULT_OVERVOLTAGE_V1 = 6,
     FAULT_OVERVOLTAGE_VOUT = 7,
-    FAULT_LINK_LOST = 8
+    FAULT_LINK_LOST = 8,
+    FAULT_UNDERVOLTAGE_VIN = 9
 } fault_code_t;
 
 // Etat de la machine de conduite (control.c). Le demarrage est CASCADE :

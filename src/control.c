@@ -15,9 +15,11 @@
 // =====================================================================
 #define V1_RAW_PER_VOLT     (4096.0f / (ADC_VREF_V * MEAS_V1_GAIN_V_PER_V))
 #define VOUT_RAW_PER_VOLT   (4096.0f / (ADC_VREF_V * MEAS_VOUT_GAIN_V_PER_V))
+#define VIN_RAW_PER_VOLT    (4096.0f / (ADC_VREF_V * MEAS_VIN_GAIN_V_PER_V))
 
 #define V1_VOLTS_TO_RAW(v)     ((int32_t)((v) * V1_RAW_PER_VOLT + 0.5f))
 #define VOUT_VOLTS_TO_RAW(v)   ((int32_t)((v) * VOUT_RAW_PER_VOLT + 0.5f))
+#define VIN_VOLTS_TO_RAW(v)    ((int32_t)((v) * VIN_RAW_PER_VOLT + 0.5f))
 
 // La rampe avance de moins d'un count par pas : il faut donc des bits
 // fractionnaires, sinon elle n'avancerait jamais. Q8 suffit largement.
@@ -30,6 +32,8 @@
 
 #define V1_OV_TRIP_RAW     V1_VOLTS_TO_RAW(CTRL_V1_OV_TRIP_V)
 #define VOUT_OV_TRIP_RAW   VOUT_VOLTS_TO_RAW(CTRL_VOUT_OV_TRIP_V)
+#define VIN_UV_TRIP_RAW    VIN_VOLTS_TO_RAW(CTRL_VIN_UV_TRIP_V)
+#define VIN_UV_ARM_RAW     VIN_VOLTS_TO_RAW(CTRL_VIN_UV_ARM_V)
 
 #define V1_SETTLE_TOL_RAW    V1_VOLTS_TO_RAW(CTRL_SETTLE_TOL_V1_V)
 #define VOUT_SETTLE_TOL_RAW  VOUT_VOLTS_TO_RAW(CTRL_SETTLE_TOL_VOUT_V)
@@ -64,6 +68,12 @@ static int32_t s_accum[2] = {0, 0};      // integrateur, en counts << CTRL_SHIFT
 static int32_t s_accum_max[2] = {0, 0};
 static uint16_t s_duty_max_counts[2] = {0, 0};
 static uint16_t s_settle_count = 0;
+
+// Surveillance de sous-tension d'entree. s_vin_armed passe a true la premiere
+// fois que VIN franchit CTRL_VIN_UV_ARM_V et n'en redescend jamais : sans
+// cela, la montee de l'alimentation au demarrage verrouillerait un defaut.
+static bool s_vin_armed = false;
+static uint16_t s_vin_uv_count = 0;
 
 // ---- Utilitaires -------------------------------------------------------
 
@@ -165,6 +175,8 @@ void control_init(void)
     s_run_requested = false;
     s_trip_requested = false;
     s_settle_count = 0;
+    s_vin_armed = false;
+    s_vin_uv_count = 0U;
 
     both_off();
 }
@@ -279,6 +291,25 @@ void control_fast_check(void)
 {
     int32_t v1_raw = (int32_t)adc_get_raw(ADC_CH_V1);
     int32_t vout_raw = (int32_t)adc_get_raw(ADC_CH_VOUT);
+    int32_t vin_raw = (int32_t)adc_get_raw(ADC_CH_VIN);
+
+    // Armement de la surveillance de sous-tension : une seule fois, quand
+    // l'alimentation d'entree est franchement etablie. Voir calib.h.
+    if (!s_vin_armed)
+    {
+        if (vin_raw > VIN_UV_ARM_RAW)
+        {
+            s_vin_armed = true;
+        }
+    }
+    else if (vin_raw < VIN_UV_TRIP_RAW)
+    {
+        s_vin_uv_count++;
+    }
+    else
+    {
+        s_vin_uv_count = 0U;
+    }
 
     if (v1_raw > V1_OV_TRIP_RAW)
     {
@@ -288,6 +319,14 @@ void control_fast_check(void)
     else if (vout_raw > VOUT_OV_TRIP_RAW)
     {
         s_fault = FAULT_OVERVOLTAGE_VOUT;
+        s_trip_requested = true;
+    }
+    else if (s_vin_uv_count >= CTRL_VIN_UV_COUNTS)
+    {
+        // Sous-tension d'entree : le convertisseur elevateur compenserait en
+        // augmentant le rapport cyclique, donc le courant, jusqu'a la
+        // surintensite. On coupe avant.
+        s_fault = FAULT_UNDERVOLTAGE_VIN;
         s_trip_requested = true;
     }
 
