@@ -48,27 +48,32 @@ void bsp_gpio_control_init(void)
     GpioCtrlRegs.GPAMUX1.bit.GPIO5 = 0;
     GpioCtrlRegs.GPADIR.bit.GPIO5 = 1;
 
-    // Broches libres 39 et 41 = GPIO4 et GPIO6, mises en ENTREE.
+    // Broches libres 39 et 41 = GPIO4 et GPIO6, mises en ENTREE avec le
+    // PULL-UP INTERNE ACTIF (GPAPUD = 0).
     //
     // ATTENTION -- LE F2802x N'A PAS DE PULL-DOWN INTERNE. Le silicium ne
-    // propose que des pull-UP, commandees par GPAPUD (1 = desactive). Le
-    // niveau bas au repos doit donc venir d'une RESISTANCE EXTERNE.
+    // propose que des pull-UP. Un niveau bas au repos ne peut donc venir que
+    // d'une RESISTANCE EXTERNE, et il n'existe aucun moyen logiciel de
+    // l'obtenir.
     //
-    // On desactive le pull-up interne, actif au reset : sans cela il
-    // combattrait la resistance externe. Un pull-up interne de ~100 kOhm
-    // contre un pull-down externe de 10 kOhm donnerait bien un niveau bas
-    // valide, mais en consommant du courant en permanence et en degradant la
-    // marge de bruit pour rien.
+    // L'ecriture est INDISPENSABLE malgre l'apparence : GPIO4 et GPIO6 sont
+    // des broches a fonction PWM (EPWM3A, EPWM4A), dont le pull-up est
+    // DESACTIVE au reset -- contrairement aux GPIO ordinaires. Sans cette
+    // ligne elles resteraient donc en l'air.
     //
-    // CONSEQUENCE A NE PAS MANQUER : dans cette configuration, une broche
-    // SANS pull-down externe FLOTTE. C'est pire que les deux etats definis.
-    // Si le pull-down externe n'est pas monte, remettre GPAPUD a 0 sur la
-    // broche concernee -- elle sera alors tiree au HAUT, mais definie.
+    // POURQUOI LE HAUT PLUTOT QUE LE BAS : ces deux broches ne pilotent rien
+    // et ne sont raccordees a rien. Le seul risque reel est qu'elles
+    // FLOTTENT -- niveau lu aleatoire, et courant de traversee permanent dans
+    // l'etage d'entree CMOS tant que le potentiel stationne a mi-tension. Un
+    // niveau haut defini vaut mieux qu'un niveau bas espere d'une resistance
+    // dont rien ne garantit qu'elle est montee.
     //
-    // 10 kOhm est coherent avec les autres pull-down de la carte (entrees des
-    // portes ET, lignes PWM vers les drivers).
-    GpioCtrlRegs.GPAPUD.bit.GPIO4 = 1;
-    GpioCtrlRegs.GPAPUD.bit.GPIO6 = 1;
+    // Si le pull-down externe 10 kOhm est effectivement pose, les deux se
+    // combattent : ~100 kOhm contre 10 kOhm donne environ 0,3 V, soit un
+    // niveau bas toujours valide, au prix de ~33 uA permanents par broche.
+    // Sans danger, mais c'est alors GPAPUD = 1 qu'il faut remettre ici.
+    GpioCtrlRegs.GPAPUD.bit.GPIO4 = 0;
+    GpioCtrlRegs.GPAPUD.bit.GPIO6 = 0;
     GpioCtrlRegs.GPAMUX1.bit.GPIO4 = 0;
     GpioCtrlRegs.GPAMUX1.bit.GPIO6 = 0;
     GpioCtrlRegs.GPADIR.bit.GPIO4 = 0; // entree
