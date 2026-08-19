@@ -75,6 +75,13 @@ static uint16_t s_settle_count = 0;
 static bool s_vin_armed = false;
 static uint16_t s_vin_uv_count = 0;
 
+#if STAGE2_OPENLOOP_TEST
+// Duty fixe de l'essai, converti en counts UNE SEULE FOIS : la periode ePWM
+// n'est connue qu'apres pwm_init(), et une multiplication flottante n'a rien
+// a faire dans l'ISR de regulation.
+static uint16_t s_openloop_counts = 0U;
+#endif
+
 // ---- Utilitaires -------------------------------------------------------
 
 static void stage_reset(uint16_t i)
@@ -169,6 +176,11 @@ void control_init(void)
         s_accum[i] = 0;
     }
 
+#if STAGE2_OPENLOOP_TEST
+    s_openloop_counts = (uint16_t)(((uint32_t)pwm_get_period_counts(STAGE_2)
+                                    * STAGE2_OPENLOOP_DUTY_PCT) / 100UL);
+#endif
+
     s_state = CTRL_STATE_IDLE;
     s_fault = FAULT_NONE;
     s_s2_enabled = false; // rien ne demarre l'etage 2 sans consigne explicite
@@ -185,6 +197,17 @@ bool control_set_setpoints(float v1_set_v, float vout_set_v)
 {
     // Consigne de sortie nulle = etage 2 desactive (CTRL_VOSET_DISABLED).
     bool s2_on = (vout_set_v > CTRL_VOSET_DISABLED);
+
+#if STAGE2_OPENLOOP_TEST
+    // Essai en boucle ouverte : l'etage 2 sort deja un duty fixe. Accepter en
+    // plus une consigne de sortie ferait cohabiter regulation et boucle
+    // ouverte sur le meme etage, sans qu'aucune trace ne dise laquelle pilote.
+    // Le refus est compte et remonte en telemetrie (tag REJ), donc visible.
+    if (s2_on)
+    {
+        return false;
+    }
+#endif
 
     // Refus en bloc si l'une des deux est hors bornes : on ne sature pas et
     // on n'applique pas la moitie d'une commande.
@@ -266,9 +289,18 @@ bool control_s2_enabled(void)
 
 bool control_hv_allowed(void)
 {
+#if STAGE2_OPENLOOP_TEST
+    // Essai : l'etage 2 n'est pas regule, exiger s_s2_enabled interdirait
+    // HV_EN pour toujours -- or le piloter est justement un des objets de
+    // l'essai. Le regime etabli de l'etage 1 reste exige, et la commande HT
+    // de l'operateur aussi (main.c) : l'essai rend HV_EN possible, pas
+    // automatique.
+    return (s_state == CTRL_STATE_RUN);
+#else
     // Etage 2 desactive : il n'y a pas de sortie HT a mettre sous tension,
     // meme une fois l'etage 1 etabli. HV_EN reste donc interdit.
     return (s_state == CTRL_STATE_RUN) && s_s2_enabled;
+#endif
 }
 
 // ---- Surveillance rapide, appelee depuis l'ISR ADC ---------------------
@@ -473,10 +505,24 @@ void control_tick(void)
         }
         else
         {
+#if STAGE2_OPENLOOP_TEST
+            // ESSAI EN BOUCLE OUVERTE : duty FIXE, aucune contre-reaction.
+            // Voir calib.h pour la portee et les dangers.
+            //
+            // Applique ICI et NULLE PART AILLEURS, pour trois raisons :
+            //  - c'est le seul etat ou l'etage 1 est etabli, donc ou l'etage 2
+            //    voit une tension d'entree stable ;
+            //  - both_off() continue de remettre l'etage 2 a zero sur defaut
+            //    et a l'arret, l'essai ne survit donc a aucun trip ;
+            //  - la boucle principale n'ecrit jamais ce duty, ce qui evite le
+            //    conflit d'ecriture decrit dans main.c.
+            pwm_set_duty_counts(STAGE_2, s_openloop_counts);
+#else
             // Duty force a zero a CHAQUE pas, pas seulement sur la
             // transition : rien ne doit pouvoir laisser une valeur
             // residuelle dans CMPA de l'etage 2.
             stage_reset(S2);
+#endif
         }
         break;
     }

@@ -33,9 +33,12 @@ float measure_vout(uint16_t raw)
     return raw_to_volts(raw) * MEAS_VOUT_GAIN_V_PER_V;
 }
 
+// Offset soustrait comme sur I1/I2 : avec le shunt de 1 Ohm, le residu de
+// sortie du ZXCT1109 pese jusqu'a 2,45 mA, soit le quart de la lecture dans
+// la zone d'usage (10 a 20 mA). Voir calib.h.
 float measure_iout(uint16_t raw)
 {
-    return raw_to_volts(raw) * MEAS_IOUT_A_PER_V;
+    return (raw_to_volts(raw) - MEAS_IOUT_OFFSET_V) * MEAS_IOUT_A_PER_V;
 }
 
 // Vadc = offset + I * gain  ->  I = (Vadc - offset) / gain.

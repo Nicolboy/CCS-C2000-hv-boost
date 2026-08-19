@@ -186,6 +186,7 @@ sur le seul bleeder de 1 MΩ.
 | Switch de sortie HT | MOSFET N piloté par opto photovoltaïque **VOM1271** | — |
 | Ampli de shunt | **TSV791** (50 MHz) — a remplacé TLV9151, lui-même remplaçant du MCP6001 de banc | monté |
 | Mesure IIN | **INA293A2** (gain 50), Rsense **0,01 Ω** — *V0.1 : ZXCT1109, Rsense 0,0208 Ω, Rgain 10 kΩ* | monté **V0.2** |
+| Mesure IOUT | **ZXCT1109 en version flottante**, protégé côté HT par **T13** (PNP FFMT560) ; sortie courant chargée par R3. Rsense **1 Ω**, R3 **4,7 kΩ** — *avant 26/08/2026 : 10 Ω / 1,5 kΩ, pleine échelle 54 mA* | monté **V0.2** |
 | Shunt MOSFET **étage 1** | **0,01 Ω** (V0.1 : 0,02 Ω) — chaîne à **0,34 V/A**, pleine échelle 9,7 A | monté **V0.2** |
 | Shunt MOSFET **étage 2** | **0,02 Ω** — inchangé depuis V0.1, gain jamais mesuré | monté |
 | MOSFET de décharge | **≥ 600 V** (l'IRF840 500 V était sous-dimensionné) | **monté V0.2** |
@@ -232,7 +233,7 @@ Valeurs réellement dans `src/calib.h`, étalonnées **en continu, PWM inhibé**
 | IIN | `Vadc × 1,78` | **V0.2** | ⚠️ **un seul point** (0,97 A), lecture qui bat de ±4,5 % |
 | VOUT | `Vadc × 181,82` | V0.1 | ⚠️ **non revérifiée sur V0.2** |
 | I2 | `Vadc / 0,637` | V0.1 | 🔴 **jamais mesurée** ; shunt resté à 0,02 Ω, donc gain ≈ **double** de I1 |
-| IOUT | `Vadc × 0,016667` | V0.1 | ❌ **jamais mesurée**, valeur de conception |
+| IOUT | `(Vadc − offset) × 0,052147` | **V0.2** | ⚠ **jamais mesurée**, valeur déduite : `GT` 4,08 mA/V (DS35033 p.3) × R3 4,7 kΩ × Rsense 1 Ω = 19,18 V/A. Pleine échelle **172 mA**, `VSENSE` 10-150 mV pour 10-150 mA — les deux points visés (150 mA / 200 V et 100 mA / 500 V) sont dans la fenêtre garantie. 🔴 **`MEAS_IOUT_OFFSET_V` reste à mesurer** : jusqu'à 2,45 mA de résidu, soit 12 à 24 % dans la zone d'usage 10-20 mA |
 | NTC | `R = R_fixe × (VREF − Vadc)/Vadc`, β = 4000 K | V0.1 | ⚠️ sens validé seulement |
 
 Points de mesure V0.2 retenus (relevés au multimètre contre l'affichage
@@ -390,7 +391,13 @@ Par ordre de priorité.
 - [ ] **IIN** — un second point vers 1 à 2 A (le point V0.2 actuel est à
       0,27 A, il ne verrouille pas l'absence d'offset).
 - [ ] **VOUT** — non revérifiée depuis le passage en V0.2.
-- [ ] **IOUT** — jamais mesuré. Bloque toute courbe de rendement système.
+- [ ] 🔴 **IOUT — offset à courant nul, EN PREMIER.** Chaîne redimensionnée le
+      26/08/2026 (1 Ω / 4,7 kΩ, pleine échelle 172 mA) : le résidu du ZXCT1109
+      pèse jusqu'à 2,45 mA, soit 12 à 24 % dans la zone d'usage 10-20 mA.
+      PWM inhibé, HV_EN à 0, valeur brute de l'ADC → `MEAS_IOUT_OFFSET_V`.
+- [ ] **IOUT — gain**, jamais mesuré ; la valeur en place est déduite du
+      datasheet et de la netlist, pas relevée. Bloque toute courbe de
+      rendement système. Se mesure contre une charge résistive connue.
 - [ ] **I2** — jamais mesuré, à faire comme I1.
 - [ ] **NTC** — confirmer la résistance fixe réelle (10 kΩ supposé) ; un
       point à température connue ≠ 25 °C reste souhaitable (le pont

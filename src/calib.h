@@ -228,9 +228,37 @@
 // l'offset : inutile de chercher plus fin.
 
 // ---- Courant de sortie (doc §4) -------------------------------------
-// NON MESURE : valeur theorique de conception (3,0 V @ 50 mA).
-// A remplacer des qu'une mesure reelle sera disponible.
-#define MEAS_IOUT_A_PER_V        0.016667f
+// ZXCT1109 en version FLOTTANTE, protege cote HT par T13 (PNP FFMT560).
+// Sortie en COURANT, convertie en tension par la resistance de charge :
+//
+//   gain = Rsense x GT x Rgain = 1 Ohm x 4,08 mA/V x 4700 = 19,18 V/A
+//
+// GT = 4,08 mA/V vient du datasheet DS35033 p.3 (table ZXCT1107/1109),
+// pas d'une mesure. Redimensionnement du 26/08/2026, shunt 10 Ohm -> 1 Ohm
+// et Rgain 1,5 k -> 4,7 k, pour porter la pleine echelle de 54 a 172 mA :
+// le domaine vise est 150 mA sous 200 V et 100 mA sous 500 V.
+//
+// POURQUOI 1 OHM ET PAS 2 : la transconductance n'est GARANTIE que pour
+// VSENSE de 10 a 150 mV (p.3). A 1 Ohm cette fenetre se transpose exactement
+// en 10 a 150 mA, donc les deux points de fonctionnement y tombent (150 et
+// 100 mV). A 2 Ohm on serait a 300 mV, soit le double de la borne haute --
+// la courbe p.5 y reste droite, mais plus rien n'est garanti.
+#define MEAS_IOUT_A_PER_V        0.052147f
+
+// Offset du zero, a MESURER a courant nul et a soustraire.
+//
+// PAS UN RAFFINEMENT. Le datasheet donne un courant de sortie residuel de
+// 3 uA typique et 10 uA maximum a VSENSE = 0 (p.3). Ramene a l'entree par
+// GT, cela fait 2,45 mV au pire, soit 2,45 mA avec un shunt de 1 Ohm --
+// c'est 12 a 24 % d'erreur sur la zone d'usage reelle (10 a 20 mA). C'est
+// le prix du passage a 1 Ohm, et il ne se paie qu'une fois, par etalonnage.
+//
+// Methode : PWM inhibe, sortie ouverte (HV_EN a 0), relever la valeur BRUTE
+// de l'ADC au debogueur et la convertir par raw x 3,3 / 4096.
+//
+// A 0 tant que la mesure n'a pas ete faite : c'est le choix sur, il ne fait
+// que sur-estimer legerement le courant, jamais l'inverse.
+#define MEAS_IOUT_OFFSET_V       0.0f
 
 // ---- Shunts MOSFET 0,02 ohm (doc §3) --------------------------------
 // Amplis TLV9151 montes sur la carte (remplacent les MCP6001 de banc).
@@ -627,6 +655,50 @@
 // REMETTRE A 0 AVANT TOUT ESSAI EN TENSION.
 #define ADC_TIMING_PROBE   0
 
+// ---- ESSAI ETAGE 2 EN BOUCLE OUVERTE --------------------------------
+//
+// DANGEREUX DES QUE LE MOSFET DE L'ETAGE 2 EST MONTE. A 1, l'etage 2 sort
+// un rapport cyclique FIXE, sans aucune contre-reaction : sur un boost
+// alimente par V_inter, la tension de sortie monte alors jusqu'au seuil de
+// coupure a 520 V, ou jusqu'a la destruction si ce seuil defaille.
+// N'a de sens QUE tant que le MOSFET principal de l'etage 2 est ABSENT --
+// et le firmware n'a aucun moyen de le verifier. REMETTRE A 0 AVANT DE LE
+// PEUPLER.
+//
+// Objet de l'essai : verifier la chaine EPWM2A -> porte ET IC9 -> driver,
+// l'armement de Stage2-EN, la commande de HV_EN, et lire une telemetrie
+// stable sur les voies VOUT / I2 / IOUT / T2.
+//
+// CE QUI RESTE INTACT, et ce n'est pas negociable : la decharge active, les
+// Trip Zones, les seuils de survoltage, le verrouillage des defauts et
+// l'etat sur. L'essai ouvre une sortie PWM, il ne desarme aucune securite.
+//
+// CE QUI CHANGE, aux trois seuls endroits marques STAGE2_OPENLOOP_TEST :
+//   control.c  - l'etage 2 sort le duty fixe en regime etabli (CTRL_STATE_RUN)
+//                et lui seul ; both_off() le remet a zero sur defaut.
+//              - toute consigne VOSET activant l'etage 2 est REFUSEE, pour
+//                que regulation et boucle ouverte ne puissent pas coexister.
+//              - HV_EN n'exige plus l'etage 2 regule, seulement RUN.
+//   main.c     - la porte ET de l'etage 2 et sa sortie ePWM sont armees.
+//
+// HV_EN reste subordonne a la commande HT de l'operateur : l'essai le rend
+// possible, il ne le force pas.
+#define STAGE2_OPENLOOP_TEST       0
+
+// Rapport cyclique fixe de l'etage 2, en POURCENT ENTIER -- le
+// preprocesseur ne sait pas comparer des flottants, et ce garde-fou vaut
+// mieux qu'une ecriture plus jolie.
+#define STAGE2_OPENLOOP_DUTY_PCT   20U
+
+#if STAGE2_OPENLOOP_TEST
+#if (STAGE2_OPENLOOP_DUTY_PCT > 50U)
+#error "STAGE2_OPENLOOP_DUTY_PCT > 50 % en boucle ouverte : refus. Sans contre-reaction, le duty fixe determine seul la tension de sortie."
+#endif
+#if ADC_TIMING_PROBE
+#error "ADC_TIMING_PROBE neutralise hv_enable_set() : HV_EN n'obeirait pas pendant l'essai. Les deux sont exclusifs."
+#endif
+#endif
+
 // =====================================================================
 // Regulation et bornes d'exploitation
 // =====================================================================
@@ -636,7 +708,16 @@
 // et le rejet est signale en telemetrie. On ne sature pas silencieusement,
 // sinon une erreur de commande passerait inapercue.
 #define CTRL_V1_SET_MIN_V       15.0f
-#define CTRL_V1_SET_MAX_V       50.0f
+// 52 et non 50, alors que le POINT DE FONCTIONNEMENT retenu est 50 V fixe :
+// se poser pile sur une borne de validation en virgule flottante est
+// fragile. Une conversion texte->flottant cote ESP32 rendant 50,000001
+// ferait refuser la consigne a chaque trame, REJ monterait, et V1 resterait
+// silencieusement a sa valeur d'init (15 V). 2 V de jeu suppriment le cas.
+//
+// Sans effet sur la marge reelle : le plafond est un garde-fou, pas la
+// consigne. L'ESP32 envoie 50,0 fixe, donc 5 V subsistent jusqu'au seuil de
+// survoltage CTRL_V1_OV_TRIP_V (55 V).
+#define CTRL_V1_SET_MAX_V       52.0f
 #define CTRL_VOUT_SET_MIN_V    200.0f
 #define CTRL_VOUT_SET_MAX_V    500.0f
 

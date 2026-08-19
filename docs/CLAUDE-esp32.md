@@ -28,7 +28,7 @@ trame `$T` annonce un défaut, la coupure a déjà eu lieu.
 
 Conséquences directes, à ne jamais contourner :
 
-- **Ne pas dupliquer les bornes physiques** (`V1SET` 15-50 V, `VOSET`
+- **Ne pas dupliquer les bornes physiques** (`V1SET` 15-52 V, `VOSET`
   200-500 V ou 0). L'ESP32 relaie, il ne valide pas. Le TMS320 rejette
   lui-même et incrémente `REJ`. Deux jeux de bornes finiront par diverger.
 - **Ne rien recalculer localement** qui existe déjà en télémétrie (`LIM`,

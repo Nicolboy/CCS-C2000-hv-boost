@@ -239,7 +239,7 @@ $C,RUN=1,V1SET=35.0,VOSET=400.0,HT=1*XX
 | Tag | Valeurs | Description |
 |---|---|---|
 | `RUN` | 0 ou 1 | Demande de marche. A 0, retour immediat a l'arret |
-| `V1SET` | **15 a 50** | Consigne V_inter, en volts |
+| `V1SET` | **15 a 52** | Consigne V_inter, en volts. Point de fonctionnement retenu : **50,0 V fixe**. Le plafond est a 52 pour ne pas poser la consigne pile sur une borne de validation en virgule flottante |
 | `VOSET` | **200 a 500**, ou **0** | Consigne sortie HT en volts ; `0` desactive l'etage 2 |
 | `HT` | 0 ou 1 | Sortie HT. N'a d'effet qu'en `STATE=4` |
 | `PWM1`, `PWM2` | 0 ou 1 | **Historiques**, acceptes mais sans effet |

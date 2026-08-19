@@ -93,6 +93,14 @@ static void enable_power_path(void)
     // ce qui est observable au scope, donc verifiable.
     bool s2 = control_s2_enabled();
 
+#if STAGE2_OPENLOOP_TEST
+    // Essai en boucle ouverte : control.c sort un duty fixe sur l'etage 2
+    // sans que s_s2_enabled soit vrai. Sans cet armement, la porte ET IC9
+    // resterait fermee et la sortie ePWM2 inhibee -- le duty existerait dans
+    // CMPA sans jamais atteindre le driver. Voir calib.h.
+    s2 = true;
+#endif
+
     hv_discharge_set(false);
 
     // Uniquement a l'armement : demarrer a duty nul est voulu (control.c
