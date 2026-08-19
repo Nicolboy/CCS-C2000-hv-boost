@@ -28,9 +28,13 @@ float measure_v1(uint16_t raw)
     return raw_to_volts(raw) * MEAS_V1_GAIN_V_PER_V;
 }
 
+// Offset ADDITIF et en VOLTS DE SORTIE, contrairement aux voies de courant
+// ou il se soustrait cote ADC : c'est la chute de LED1, en serie dans le
+// pont diviseur. Le pont ne voit que (V_HT - Vf), il faut donc la rajouter
+// apres multiplication par le gain. Voir calib.h.
 float measure_vout(uint16_t raw)
 {
-    return raw_to_volts(raw) * MEAS_VOUT_GAIN_V_PER_V;
+    return raw_to_volts(raw) * MEAS_VOUT_GAIN_V_PER_V + MEAS_VOUT_OFFSET_V;
 }
 
 // Offset soustrait comme sur I1/I2 : avec le shunt de 1 Ohm, le residu de

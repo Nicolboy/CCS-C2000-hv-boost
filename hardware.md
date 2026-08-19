@@ -231,7 +231,7 @@ Valeurs réellement dans `src/calib.h`, étalonnées **en continu, PWM inhibé**
 | V1 | `Vadc × 29,27` | **V0.2** | ✅ trois points de 23 à 46 V, dispersion ~1 % |
 | VIN | `Vadc × 10,909` | V0.1 | ✅ concorde au multimètre depuis la correction de masse (24,1 V des deux côtés) |
 | IIN | `Vadc × 1,78` | **V0.2** | ⚠️ **un seul point** (0,97 A), lecture qui bat de ±4,5 % |
-| VOUT | `Vadc × 181,82` | V0.1 | ⚠️ **non revérifiée sur V0.2** |
+| VOUT | `Vadc × 177,0 + 1,70` | **V0.2** | ✅ **loi à deux termes** : LED1 est en série dans le pont, d'où l'offset. Trois déterminations indépendantes concordant à 1 % — rapport netlist 990 k/5,6 k = 177,8, ajustement sur deux points (12,65 et 49 V), chute de LED mesurée 1,5-1,6 V. ⚠️ points à 12 et 49 V pour une chaîne qui doit aller à 500 : à reprendre vers 200 V. **Relevés D4 déposée**, cf. ci-dessous |
 | I2 | `Vadc / 0,637` | V0.1 | 🔴 **jamais mesurée** ; shunt resté à 0,02 Ω, donc gain ≈ **double** de I1 |
 | IOUT | `(Vadc − offset) × 0,052147` | **V0.2** | ⚠ **jamais mesurée**, valeur déduite : `GT` 4,08 mA/V (DS35033 p.3) × R3 4,7 kΩ × Rsense 1 Ω = 19,18 V/A. Pleine échelle **172 mA**, `VSENSE` 10-150 mV pour 10-150 mA — les deux points visés (150 mA / 200 V et 100 mA / 500 V) sont dans la fenêtre garantie. 🔴 **`MEAS_IOUT_OFFSET_V` reste à mesurer** : jusqu'à 2,45 mA de résidu, soit 12 à 24 % dans la zone d'usage 10-20 mA |
 | NTC | `R = R_fixe × (VREF − Vadc)/Vadc`, β = 4000 K | V0.1 | ⚠️ sens validé seulement |
@@ -390,7 +390,17 @@ Par ordre de priorité.
       l'ADC** à deux tensions, seule façon de séparer gain et offset.
 - [ ] **IIN** — un second point vers 1 à 2 A (le point V0.2 actuel est à
       0,27 A, il ne verrouille pas l'absence d'offset).
-- [ ] **VOUT** — non revérifiée depuis le passage en V0.2.
+- [x] ~~**VOUT**~~ — faite le 20/08/2026 : `Vadc × 177,0 + 1,70`. Reste un
+      point vers 200 V à confirmer quand l'étage 2 tournera.
+- [ ] 🔴 **Remettre un clamp sur la voie VOUT**, sur la **sortie du suiveur**
+      et non sur le nœud du pont. D4 y a été déposée pour pouvoir étalonner :
+      sur le nœud, elle redresse le couplage de découpage et fabrique jusqu'à
+      +480 mV de continu, soit 130 V d'erreur. Sans clamp, une ouverture de
+      R10 enverrait le tap vers le rail HT à travers 990 kΩ.
+- [ ] **Sortir LED1 du pont de mesure** et la mettre sur sa propre branche.
+      Un boîtier 5 mm traversant en série dans une chaîne d'instrumentation
+      apporte une chute non linéaire, une jonction redresseuse et une
+      antenne. C'est le correctif de fond du problème ci-dessus.
 - [ ] 🔴 **IOUT — offset à courant nul, EN PREMIER.** Chaîne redimensionnée le
       26/08/2026 (1 Ω / 4,7 kΩ, pleine échelle 172 mA) : le résidu du ZXCT1109
       pèse jusqu'à 2,45 mA, soit 12 à 24 % dans la zone d'usage 10-20 mA.

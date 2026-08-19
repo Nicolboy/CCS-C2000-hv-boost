@@ -98,9 +98,45 @@
 // assez pour separer un gain d'un offset a la resolution de l'affichage. La
 // valeur theorique du pont etant 11,00, il est probable que V0.2 soit revenue
 // dessus, mais ce n'est PAS mesure. Reprendre sur la valeur brute de l'ADC.
-// VOUT : jamais reverifiee depuis le passage en V0.2.
 #define MEAS_VIN_GAIN_V_PER_V    10.909f  // broche 10, coef mesure 0,09
-#define MEAS_VOUT_GAIN_V_PER_V   181.82f  // broche 14, coef mesure 0,0055
+
+// ---- VOUT : etalonnee le 20/08/2026, gain ET offset ------------------
+//
+// LA LOI N'EST PAS UN GAIN PUR. Une LED temoin "HT presente" est en SERIE
+// dans le pont, entre la chaine haute et le point milieu :
+//
+//   +HT -- R32 330k -- R31 330k -- R30 330k -- LED1 --|>|-- tap -- R10 5,6k -- GND
+//
+//   V_HT = Vadc x MEAS_VOUT_GAIN_V_PER_V + MEAS_VOUT_OFFSET_V
+//
+// Deux points releves au multimetre en sortie de suiveur :
+//   12,65 V -> 0,062 V     49,00 V -> 0,268 V
+//   -> gain 176,5   offset 1,71 V
+//
+// Trois determinations INDEPENDANTES concordent a 1 % : le rapport calcule
+// depuis la netlist (990k/5,6k = 177,8), l'ajustement sur les deux points
+// ci-dessus, et la chute de LED mesuree directement (1,5 V a 12 V, 1,6 V a
+// 49 V). D'ou 177,0 -- moyenne arrondie a la precision reelle, pas plus.
+//
+// L'ANCIENNE VALEUR 181,82 ETAIT UNE VALEUR DE CONCEPTION, jamais mesuree,
+// et elle ignorait la LED : 2,7 % de gain en trop, plus 1,7 V manquants.
+//
+// A REPRENDRE avec un point vers 200 V le jour ou l'etage 2 tournera : ces
+// deux points sont a 12 et 49 V pour une chaine qui doit mesurer jusqu'a
+// 500, et le seuil de coupure en depend.
+//
+// PIEGE DE MESURE, decouvert au banc le 20/08/2026 : le clamp D4 sur le
+// noeud du pont REDRESSE le couplage de decoupage et fabrique jusqu'a
+// +480 mV de continu -- soit 130 V d'erreur d'affichage. Ces deux points
+// ont ete releves D4 DEPOSEE. Un RC 10k/1nF en amont reduit l'artefact sans
+// le supprimer : les fronts reels sont plus rapides que ce qu'un scope
+// 100 MHz montre, et un 1 nF ceramique cesse de filtrer avant. Le clamp
+// doit etre remis SUR LA SORTIE DU SUIVEUR, ou le signal est basse
+// impedance et propre. Ne jamais retirer un clamp sans le replacer : le
+// pont limite le noeud a 2,92 V au seuil de 520 V, mais si R10 s'ouvre le
+// tap part vers le rail HT a travers 990 kOhm.
+#define MEAS_VOUT_GAIN_V_PER_V   177.0f   // broche 14, [V0.2] mesure
+#define MEAS_VOUT_OFFSET_V       1.70f    // chute de LED1, en VOLTS DE SORTIE
 
 // ---- Courant d'entree (doc §2) --------------------------------------
 //

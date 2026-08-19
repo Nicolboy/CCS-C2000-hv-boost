@@ -18,8 +18,22 @@
 #define VIN_RAW_PER_VOLT    (4096.0f / (ADC_VREF_V * MEAS_VIN_GAIN_V_PER_V))
 
 #define V1_VOLTS_TO_RAW(v)     ((int32_t)((v) * V1_RAW_PER_VOLT + 0.5f))
-#define VOUT_VOLTS_TO_RAW(v)   ((int32_t)((v) * VOUT_RAW_PER_VOLT + 0.5f))
 #define VIN_VOLTS_TO_RAW(v)    ((int32_t)((v) * VIN_RAW_PER_VOLT + 0.5f))
+
+// VOUT porte un OFFSET (chute de LED1 en serie dans le pont, cf. calib.h),
+// d'ou DEUX conversions qu'il ne faut jamais confondre :
+//
+//   _VOLTS_TO_RAW  -> une TENSION ABSOLUE. L'offset se soustrait, puisque
+//                     le pont ne voit que (V_HT - Vf).
+//   _DELTA_TO_RAW  -> un ECART entre deux tensions. L'offset s'annule dans
+//                     la difference et ne doit SURTOUT PAS etre soustrait.
+//
+// Utiliser la premiere pour une tolerance donnerait ici -1,7 V converti en
+// counts, soit un critere d'etablissement negatif : l'etage 2 ne se
+// declarerait jamais etabli et la machine resterait bloquee en START_S2.
+#define VOUT_VOLTS_TO_RAW(v)                                              \
+    ((int32_t)(((v) - MEAS_VOUT_OFFSET_V) * VOUT_RAW_PER_VOLT + 0.5f))
+#define VOUT_DELTA_TO_RAW(v)   ((int32_t)((v) * VOUT_RAW_PER_VOLT + 0.5f))
 
 // La rampe avance de moins d'un count par pas : il faut donc des bits
 // fractionnaires, sinon elle n'avancerait jamais. Q8 suffit largement.
@@ -36,7 +50,18 @@
 #define VIN_UV_ARM_RAW     VIN_VOLTS_TO_RAW(CTRL_VIN_UV_ARM_V)
 
 #define V1_SETTLE_TOL_RAW    V1_VOLTS_TO_RAW(CTRL_SETTLE_TOL_V1_V)
-#define VOUT_SETTLE_TOL_RAW  VOUT_VOLTS_TO_RAW(CTRL_SETTLE_TOL_VOUT_V)
+#define VOUT_SETTLE_TOL_RAW  VOUT_DELTA_TO_RAW(CTRL_SETTLE_TOL_VOUT_V)
+
+// GARDE-FOU DE COMPILATION. DACVAL sur 10 bits avait deja produit ce mode de
+// panne (cf. SAFETY_DAC_CODE_FROM_V) : un code hors plage ne sature pas, il
+// desarme la protection en silence. Ici, un seuil converti au-dela de 4095
+// counts ne serait JAMAIS atteint, l'ADC saturant a 4095 -- la coupure de
+// survoltage VOUT ne se declencherait plus sur aucune tension.
+//
+// C'est arrive : avec le gain errone de 181,82 et un pont reel a 121, le
+// seuil de "520 V" tombait a 347 V reels ; corriger le seul gain sans ce
+// garde-fou l'aurait pousse a 5322 counts, donc hors d'atteinte.
+typedef char vout_ov_trip_fits_in_adc[(VOUT_OV_TRIP_RAW <= 4095) ? 1 : -1];
 
 // Indices internes des deux etages.
 #define S1  0U
@@ -279,7 +304,14 @@ float control_get_v1_setpoint(void)
 
 float control_get_vout_setpoint(void)
 {
-    return (float)s_target_raw[S2] / VOUT_RAW_PER_VOLT;
+    // Symetrique de VOUT_VOLTS_TO_RAW : l'offset a ete soustrait a l'aller,
+    // il se rajoute au retour. Sans ca la telemetrie VOSP renverrait 1,7 V de
+    // moins que la consigne envoyee, et l'ESP32 croirait la commande refusee.
+    if (s_target_raw[S2] == 0)
+    {
+        return 0.0f; // etage 2 desactive : la convention est zero exact
+    }
+    return (float)s_target_raw[S2] / VOUT_RAW_PER_VOLT + MEAS_VOUT_OFFSET_V;
 }
 
 bool control_s2_enabled(void)
