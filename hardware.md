@@ -233,7 +233,7 @@ Valeurs réellement dans `src/calib.h`, étalonnées **en continu, PWM inhibé**
 | IIN | `Vadc × 1,78` | **V0.2** | ⚠️ **un seul point** (0,97 A), lecture qui bat de ±4,5 % |
 | VOUT | `Vadc × 177,0 + 1,70` | **V0.2** | ✅ **loi à deux termes** : LED1 est en série dans le pont, d'où l'offset. Trois déterminations indépendantes concordant à 1 % — rapport netlist 990 k/5,6 k = 177,8, ajustement sur deux points (12,65 et 49 V), chute de LED mesurée 1,5-1,6 V. ⚠️ points à 12 et 49 V pour une chaîne qui doit aller à 500 : à reprendre vers 200 V. **Relevés D4 déposée**, cf. ci-dessous |
 | I2 | `Vadc / 0,637` | V0.1 | 🔴 **jamais mesurée** ; shunt resté à 0,02 Ω, donc gain ≈ **double** de I1 |
-| IOUT | `(Vadc − offset) × 0,052147` | **V0.2** | ⚠ **jamais mesurée**, valeur déduite : `GT` 4,08 mA/V (DS35033 p.3) × R3 4,7 kΩ × Rsense 1 Ω = 19,18 V/A. Pleine échelle **172 mA**, `VSENSE` 10-150 mV pour 10-150 mA — les deux points visés (150 mA / 200 V et 100 mA / 500 V) sont dans la fenêtre garantie. 🔴 **`MEAS_IOUT_OFFSET_V` reste à mesurer** : jusqu'à 2,45 mA de résidu, soit 12 à 24 % dans la zone d'usage 10-20 mA |
+| IOUT | `Vadc × 0,0475` | **V0.2** | ✅ **mesurée**, offset **nul** (< 0,05 mA). ⚠️ **la chaîne compresse** : 21,07 V/A à 27 mA, 20,10 à 47,7, 18,51 à 104 — soit **−12 % sur la plage**. La constante est calée sur la **zone d'usage 10-20 mA** ; la voie sous-lit donc d'environ 12 % vers 100 mA. Ne pas l'utiliser pour un rendement à pleine charge sans corriger |
 | NTC | `R = R_fixe × (VREF − Vadc)/Vadc`, β = 4000 K | V0.1 | ⚠️ sens validé seulement |
 
 Points de mesure V0.2 retenus (relevés au multimètre contre l'affichage
@@ -401,13 +401,25 @@ Par ordre de priorité.
       Un boîtier 5 mm traversant en série dans une chaîne d'instrumentation
       apporte une chute non linéaire, une jonction redresseuse et une
       antenne. C'est le correctif de fond du problème ci-dessus.
-- [ ] 🔴 **IOUT — offset à courant nul, EN PREMIER.** Chaîne redimensionnée le
-      26/08/2026 (1 Ω / 4,7 kΩ, pleine échelle 172 mA) : le résidu du ZXCT1109
-      pèse jusqu'à 2,45 mA, soit 12 à 24 % dans la zone d'usage 10-20 mA.
-      PWM inhibé, HV_EN à 0, valeur brute de l'ADC → `MEAS_IOUT_OFFSET_V`.
-- [ ] **IOUT — gain**, jamais mesuré ; la valeur en place est déduite du
-      datasheet et de la netlist, pas relevée. Bloque toute courbe de
-      rendement système. Se mesure contre une charge résistive connue.
+- [x] ~~**IOUT — offset**~~ — mesuré **nul** le 20/08/2026 (< 0,05 mA), bien
+      mieux que les 2,45 mA de pire cas redoutés. La réserve contre le shunt
+      de 1 Ω est levée.
+- [x] ~~**IOUT — gain**~~ — mesuré : `Vadc × 0,0475`, calé sur la zone d'usage.
+- [ ] ⚠️ **IOUT — caractériser la compression.** Le gain décroît de **12 %
+      entre 27 et 104 mA** (21,07 → 18,51 V/A), de façon monotone et sur des
+      points PWM inhibé. Aucune constante unique ne sert toute la plage : la
+      voie **sous-lit d'environ 12 % vers 100 mA**. Suspect principal, la
+      compliance de sortie du ZXCT1109 (broche OUT servant de substrat,
+      note 1 p.2 du DS35033). À trancher avant toute courbe de rendement à
+      pleine charge.
+- [ ] **IOUT — supprimer le résidu de découpage.** Le 10 nF oublié en sortie
+      de suiveur a ramené l'erreur en marche de −12,6 % à −3,5 %. Passer
+      **C14 de 100 pF à 10 nF** (R9 = 10 kΩ est déjà en place en amont)
+      supprimerait le reste, sans aucun risque : `measure_iout()` n'alimente
+      que la télémétrie, pas de latence à préserver.
+- [ ] **Vérifier les 10 nF des autres suiveurs.** Celui de IOUT avait été
+      oublié lors de la campagne « RC 1 kΩ + 10 nF en sortie de tous les
+      suiveurs » (§5). Rien ne dit qu'il était le seul.
 - [ ] **I2** — jamais mesuré, à faire comme I1.
 - [ ] **NTC** — confirmer la résistance fixe réelle (10 kΩ supposé) ; un
       point à température connue ≠ 25 °C reste souhaitable (le pont

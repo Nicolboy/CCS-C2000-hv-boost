@@ -279,21 +279,59 @@
 // en 10 a 150 mA, donc les deux points de fonctionnement y tombent (150 et
 // 100 mV). A 2 Ohm on serait a 300 mV, soit le double de la borne haute --
 // la courbe p.5 y reste droite, mais plus rien n'est garanti.
-#define MEAS_IOUT_A_PER_V        0.052147f
+//
+// ---- MESUREE le 20/08/2026, et LA CHAINE COMPRESSE ------------------
+// Trois points, charge resistive de 473 Ohm mesuree a l'ohmmetre, courant
+// verifie a l'amperemetre en serie :
+//
+//   I reel     serveur    Vadc      V/A     PWM
+//   27,3 mA    30,0 mA    0,5753    21,07   inhibe
+//   47,7 mA    50,0 mA    0,9588    20,10   inhibe
+//   103,6 mA  100,0 mA    1,9176    18,51   en marche
+//
+// Le gain DECROIT de 12 % entre 27 et 104 mA, de facon monotone. Les deux
+// premiers points sont PWM inhibe, donc hors de tout soupcon d'artefact :
+// la tendance est etablie par eux seuls. Suspect principal : la compliance
+// de sortie du ZXCT1109, dont la broche OUT sert aussi de substrat (note 1
+// p.2) -- courbe OUTPUT CURRENT vs OUTPUT VOLTAGE p.5. Le rapport de
+// transfert de T13, non quantifie dans le depot materiel, peut s'y ajouter.
+//
+// AUCUNE CONSTANTE UNIQUE NE PEUT SERVIR TOUTE LA PLAGE. Le choix retenu
+// est de caler sur la ZONE D'USAGE REELLE, 10 a 20 mA, donc sur le point le
+// plus bas :
+//
+//   MEAS_IOUT_A_PER_V = 1 / 21,07 = 0,0475
+//
+// CONSEQUENCE ASSUMEE : la voie SOUS-LIT d'environ 12 % vers 100 mA, et
+// davantage a 150. Ne jamais s'en servir pour une courbe de rendement a
+// pleine charge sans corriger. C'est ecrit ici parce que rien dans le code
+// ne le laisse deviner.
+//
+// ARTEFACT DE DECOUPAGE, traite mais pas clos. IOUT est en fin de sequence
+// ADC, echantillonne a une phase arbitraire du cycle : adc.c n'optimise
+// l'instant que pour I1. Le commentaire de ce fichier affirmait que le
+// courant y est continu -- c'etait vrai de la chaine IIN sur V0.1, pas de
+// IOUT, dont le shunt est en aval de HV_EN. L'ajout du 10 nF oublie en
+// sortie de suiveur a ramene l'erreur de -12,6 % a -3,5 % a 104 mA.
+// Passer C14 de 100 pF a 10 nF (R9 = 10 k est deja en place en amont du
+// suiveur) supprimerait le reste. SANS RISQUE sur cette voie : measure_iout()
+// n'alimente que la telemetrie, aucun seuil ni regulation, donc aucune
+// latence a preserver -- contrairement a VOUT.
+#define MEAS_IOUT_A_PER_V        0.0475f
 
-// Offset du zero, a MESURER a courant nul et a soustraire.
+// Offset du zero : MESURE NUL le 20/08/2026, PWM inhibe et sortie ouverte.
+// L'affichage descend au dixieme de mA et indique 0,0 -- donc moins de
+// 0,05 mA de residu.
 //
-// PAS UN RAFFINEMENT. Le datasheet donne un courant de sortie residuel de
-// 3 uA typique et 10 uA maximum a VSENSE = 0 (p.3). Ramene a l'entree par
-// GT, cela fait 2,45 mV au pire, soit 2,45 mA avec un shunt de 1 Ohm --
-// c'est 12 a 24 % d'erreur sur la zone d'usage reelle (10 a 20 mA). C'est
-// le prix du passage a 1 Ohm, et il ne se paie qu'une fois, par etalonnage.
+// C'est BIEN MEILLEUR que le pire cas redoute. Le datasheet donne un courant
+// de sortie residuel de 3 uA typique et 10 uA maximum a VSENSE = 0 (p.3),
+// soit jusqu'a 2,45 mA avec un shunt de 1 Ohm -- ce qui aurait fait 12 a
+// 24 % d'erreur sur la zone d'usage 10-20 mA. C'etait la principale reserve
+// contre le passage a 1 Ohm ; elle est levee.
 //
-// Methode : PWM inhibe, sortie ouverte (HV_EN a 0), relever la valeur BRUTE
-// de l'ADC au debogueur et la convertir par raw x 3,3 / 4096.
-//
-// A 0 tant que la mesure n'a pas ete faite : c'est le choix sur, il ne fait
-// que sur-estimer legerement le courant, jamais l'inverse.
+// Consequence de methode : l'offset etant mesure nul, UN SEUL POINT suffit
+// desormais a fixer le gain. La regle des deux points n'existait que pour
+// separer gain et offset.
 #define MEAS_IOUT_OFFSET_V       0.0f
 
 // ---- Shunts MOSFET 0,02 ohm (doc §3) --------------------------------
