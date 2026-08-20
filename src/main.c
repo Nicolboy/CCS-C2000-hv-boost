@@ -85,6 +85,20 @@ static void update_overtemp(void)
 // enter_safe_state(), seul chemin de retour au repos.
 static bool s_power_path_armed = false;
 
+#if STAGE2_OPENLOOP_TEST
+// Commande manuelle de Stage2-EN pendant l'essai, A ECRIRE DEPUIS LE
+// DEBOGUEUR. Mise a 0, elle ferme la porte ET IC9 en laissant la sortie
+// EPWM2A commuter : c'est le seul moyen d'observer l'effet de la porte
+// SEULE. Une ecriture directe sur GPIO17 ne tiendrait pas -- la boucle
+// principale reappelle enable_power_path() a chaque tour et la reecrirait
+// en quelques microsecondes ; un point d'arret ne convient pas non plus,
+// FREE_SOFT = 0 gelant le compteur ePWM avec le CPU.
+//
+// volatile et NON static : le symbole doit survivre a -O2 et rester
+// accessible au debogueur. Disparait avec le bloc d'essai.
+volatile bool g_s2_en_test = true;
+#endif
+
 static void enable_power_path(void)
 {
     // Etage 2 desactive (consigne de sortie nulle) : sa porte ET reste
@@ -116,7 +130,14 @@ static void enable_power_path(void)
     pwm_enable(STAGE_1, true);
     pwm_enable(STAGE_2, s2);
     stage_enable_set(STAGE_1, true);
+#if STAGE2_OPENLOOP_TEST
+    // La sortie ePWM2 reste debridee ci-dessus : on ne coupe QUE la porte,
+    // sinon les deux mecanismes agiraient ensemble et la mesure ne dirait
+    // pas lequel a produit l'effet observe.
+    stage_enable_set(STAGE_2, s2 && g_s2_en_test);
+#else
     stage_enable_set(STAGE_2, s2);
+#endif
 }
 
 // Priorite 2 > 3 > 4 > 5 > 1 : EMUSTOP est le code le moins prioritaire

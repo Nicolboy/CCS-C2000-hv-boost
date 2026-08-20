@@ -89,8 +89,14 @@ static volatile int32_t s_target_raw[2] = {0, 0};
 // Consignes effectivement appliquees, rampees, en Q8.
 static int32_t s_ramp_q8[2] = {0, 0};
 
-static int32_t s_accum[2] = {0, 0};      // integrateur, en counts << CTRL_SHIFT
+static int32_t s_accum[2] = {0, 0};      // integrateur, en counts << CTRL_KI_SHIFT
 static int32_t s_accum_max[2] = {0, 0};
+#if CTRL_KD_ENABLE
+// Erreur du pas precedent, pour le terme derive. Compilee avec lui : la
+// garder inconditionnellement produisait un avertissement "set but never
+// used", et un build silencieux vaut mieux qu'une variable de confort.
+static int32_t s_prev_error[2] = {0, 0};
+#endif
 static uint16_t s_duty_max_counts[2] = {0, 0};
 static uint16_t s_settle_count = 0;
 
@@ -112,6 +118,9 @@ static uint16_t s_openloop_counts = 0U;
 static void stage_reset(uint16_t i)
 {
     s_accum[i] = 0;
+#if CTRL_KD_ENABLE
+    s_prev_error[i] = 0;
+#endif
     pwm_set_duty_counts(k_stages[i], 0U);
 }
 
@@ -146,19 +155,54 @@ static void ramp_toward(uint16_t i, int32_t step_q8)
     }
 }
 
-// Integrateur pur : accum += erreur, duty = accum >> CTRL_SHIFT.
-// Aucune multiplication, aucune division. Renvoie l'erreur, dont l'appelant
-// se sert pour juger de l'etablissement.
+// Decalage a GAUCHE d'une valeur signee. `v << n` sur un negatif est un
+// comportement indefini en C : on decale la valeur absolue et on rend le
+// signe. Le compilateur en fait le meme code qu'un decalage nu, mais celui-ci
+// est defini par la norme.
+static int32_t shl_signed(int32_t v, uint16_t n)
+{
+    if (v < 0)
+    {
+        return -((-v) << n);
+    }
+    return (v << n);
+}
+
+// ---- PID, en virgule fixe ----------------------------------------------
+//
+//   duty_counts = P + I + D
+//
+// Les trois termes sont calcules SEPAREMENT et gardes dans des variables
+// distinctes, meme quand la somme seule suffirait : un releve au debogueur
+// dit alors immediatement lequel agit, ce qu'une expression unique ne
+// permettrait pas. Le compilateur les elimine s'ils sont inutiles.
+//
+// Gains : voir calib.h. Kp et Kd decalent a GAUCHE, Ki a DROITE.
+// Le terme derive est compile hors de la boucle tant que CTRL_KD_ENABLE
+// vaut 0 -- il ne coute alors pas un cycle.
+//
+// Renvoie l'erreur, dont l'appelant se sert pour juger de l'etablissement.
 static int32_t regulate(uint16_t i, int32_t measured_raw)
 {
     int32_t error = (s_ramp_q8[i] >> RAMP_FRAC_BITS) - measured_raw;
+    int32_t duty_max = (int32_t)s_duty_max_counts[i];
+    int32_t accum_prev = s_accum[i];
+    int32_t p_term;
+    int32_t i_term;
+    int32_t d_term;
     int32_t duty;
 
-    s_accum[i] += error;
+    // ---- P : proportionnel ---------------------------------------------
+    // Agit dans le pas MEME ou l'ecart apparait. C'est lui, et lui seul, qui
+    // peut repondre a un delestage : l'integrateur, par construction, a
+    // besoin de plusieurs pas pour batir sa correction.
+    p_term = shl_signed(error, CTRL_KP_SHIFT);
 
-    // Anti-emballement : l'accumulateur est borne aux memes limites que le
-    // duty, donc il ne peut pas accumuler une avance qu'il faudrait ensuite
-    // "derouler" avant que la sortie ne reagisse.
+    // ---- I : integral ---------------------------------------------------
+    // Supprime l'erreur statique. L'accumulateur est borne aux memes limites
+    // que le duty : il ne peut pas accumuler une avance qu'il faudrait
+    // ensuite "derouler" avant que la sortie ne reagisse.
+    s_accum[i] += error;
     if (s_accum[i] < 0)
     {
         s_accum[i] = 0;
@@ -167,8 +211,42 @@ static int32_t regulate(uint16_t i, int32_t measured_raw)
     {
         s_accum[i] = s_accum_max[i];
     }
+    i_term = s_accum[i] >> CTRL_KI_SHIFT;
 
-    duty = s_accum[i] >> CTRL_SHIFT;
+    // ---- D : derive ------------------------------------------------------
+#if CTRL_KD_ENABLE
+    d_term = shl_signed(error - s_prev_error[i], CTRL_KD_SHIFT);
+    s_prev_error[i] = error;
+#else
+    d_term = 0;
+#endif
+
+    // ---- Somme et saturation ---------------------------------------------
+    duty = p_term + i_term + d_term;
+
+    // Anti-emballement, second etage. Le bornage de l'accumulateur ci-dessus
+    // ne suffit plus depuis que P existe : la SOMME peut saturer alors que
+    // l'accumulateur est en pleine plage. Integrer dans ce cas ne ferait que
+    // gonfler une reserve sans effet sur la sortie, qu'il faudrait ensuite
+    // depenser avant que la commande ne redescende -- c'est le mecanisme
+    // classique du depassement au demarrage. On annule donc l'integration de
+    // ce pas, sans toucher a P ni a D, qui restent legitimes.
+    if (duty > duty_max || duty < 0)
+    {
+        s_accum[i] = accum_prev;
+        i_term = accum_prev >> CTRL_KI_SHIFT;
+        duty = p_term + i_term + d_term;
+
+        if (duty > duty_max)
+        {
+            duty = duty_max;
+        }
+        else if (duty < 0)
+        {
+            duty = 0;
+        }
+    }
+
     pwm_set_duty_counts(k_stages[i], (uint16_t)duty);
 
     return error;
@@ -194,11 +272,14 @@ void control_init(void)
         uint16_t period = pwm_get_period_counts(k_stages[i]);
 
         s_duty_max_counts[i] = (uint16_t)(CTRL_DUTY_MAX * (float)period);
-        s_accum_max[i] = ((int32_t)s_duty_max_counts[i]) << CTRL_SHIFT;
+        s_accum_max[i] = ((int32_t)s_duty_max_counts[i]) << CTRL_KI_SHIFT;
 
         s_target_raw[i] = 0;
         s_ramp_q8[i] = 0;
         s_accum[i] = 0;
+#if CTRL_KD_ENABLE
+        s_prev_error[i] = 0;
+#endif
     }
 
 #if STAGE2_OPENLOOP_TEST

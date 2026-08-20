@@ -137,12 +137,31 @@ Deux portes ET **74HVC1G08** (IC8, IC9), une par étage :
 
 ```
 COMPxOUT (Stagex-default, CMPINV=1 : 1 = OK, 0 = défaut) ──┐
-                                                            ├─ AND ─→ PWMx-EN (driver)
+                                                            ├─ AND ─→ PWMx-EN (validation du driver)
 GPIO Stagex-EN (logiciel : 1 = autorisé, 0 = inhibé)     ──┘
+
+EPWMxA ─────────────────────────────────────────────────────────→ entrée PWM du driver (DIRECT)
 ```
+
+**La porte ET n'est PAS en série avec le PWM** : elle attaque l'entrée de
+validation du driver, le signal PWM lui parvenant par un chemin séparé. Le
+PWM reste donc visible sur l'entrée du driver même étage inhibé — c'est
+normal, et ce n'est pas une fuite. Vérifié au scope le 20/08/2026 (V0.2,
+étage 2, MOSFET absent) : `Stage2-EN = 0` laisse EPWM2A commuter, et c'est
+la **sortie** du driver qui se fige.
 
 Drivers **actifs à l'état haut**, d'où `CMPINV = 1`. Le logiciel peut
 **inhiber en plus, jamais outrepasser** la coupure matérielle.
+
+**État de repli, mesuré.** Driver invalidé → sortie **basse** → grille à
+0 V → MOSFET **bloqué**, quelle que soit l'activité sur l'entrée PWM. Les
+trois mécanismes de coupure convergent vers ce même état :
+
+| Origine | Sortie driver | MOSFET |
+|---|---|---|
+| `Stagex-EN = 0` (logiciel) | bas | bloqué |
+| `COMPxOUT = 0` (surintensité câblée, 30 ns) | bas | bloqué |
+| `TZ_FORCE_HI` (Trip Zone, broche forcée haute) | bas | bloqué |
 
 **Défaut connu de l'état au reset — correctif matériel obligatoire.**
 GPIO1/GPIO3 (COMPxOUT) sont des broches à fonction PWM : leurs pull-ups ne

@@ -845,21 +845,140 @@
 #define CTRL_DUTY_MIN            0.0f
 #define CTRL_DUTY_MAX            0.95f
 
-// ---- Loi de commande : integrateur pur, virgule fixe -----------------
-// duty_counts = accumulateur >> CTRL_SHIFT, l'accumulateur recevant
-// l'erreur brute a chaque pas. Aucune multiplication ni division, donc
-// utilisable en ISR (regle : que des comparaisons, additions, decalages).
+// ---- Loi de commande PID, virgule fixe -------------------------------
 //
-// Le gain integral vaut 1 / 2^CTRL_SHIFT par pas de regulation. Volontaire-
-// ment tres faible pour demarrer : le boost a fort gain presente un zero
-// dans le demi-plan droit qui limite la bande passante atteignable, et on
-// n'a aucun modele du convertisseur. A augmenter par paliers apres mesure
-// de la reponse reelle. Le terme proportionnel viendra ensuite.
-#define CTRL_SHIFT               12U
+//   duty_counts = P + I + D
+//
+// Les trois gains sont des PUISSANCES DE DEUX : la loi ne contient que des
+// decalages, des additions et des comparaisons. C'est la regle du projet
+// pour tout ce qui tourne en ISR -- ni multiplication, ni division.
+//
+//   P = erreur                << CTRL_KP_SHIFT   ->  Kp = 2^CTRL_KP_SHIFT
+//   I = accumulateur          >> CTRL_KI_SHIFT   ->  Ki = 1 / 2^CTRL_KI_SHIFT
+//   D = (erreur - precedente) << CTRL_KD_SHIFT   ->  Kd = 2^CTRL_KD_SHIFT
+//
+// ATTENTION AU SENS DES DECALAGES. Kp et Kd sont des decalages a GAUCHE,
+// Ki un decalage a DROITE. Ce n'est pas une coquette : l'unite de l'erreur
+// est le count d'ADC, celle de la sortie le count de duty, et le rapport
+// utile entre les deux est SUPERIEUR A 1 (voir le dimensionnement de Kp
+// ci-dessous). Une formulation en `erreur >> n` serait structurellement
+// incapable d'atteindre le gain necessaire.
+//
+// ---- Dimensionnement de Kp, a partir du releve du 20/08/2026 ---------
+//
+// Delestage a 100 mA, etage 1 a 50 V, mesure au scope a 160 kHz :
+// la sortie monte de 49,0 a 54,2 V en 5 ms, puis reste sur ce palier plus
+// de 30 ms sans que l'integrateur seul ne la ramene (il ne retire que 6
+// counts de duty sur 300 pendant ce temps). Le seuil de survoltage etant a
+// 55 V, un tir precedent avait verrouille un defaut.
+//
+// De ce releve on tire :
+//   - condensateur de sortie   C = P/(V.dV/dt) = 5/(50 x 1040) ~ 100 uF
+//   - sensibilite              dV/dD = Vin/(1-D)^2 ~ 178 V par unite de D,
+//                              soit ~0,6 V par count de duty sur 300
+//   - echelle de mesure        1 V = 39,8 counts d'ADC sur la voie V1
+//
+// Pour que la montee s'arrete vers +1 V, il faut retirer environ 120 counts
+// de duty pour 40 counts d'erreur, soit Kp ~ 3. La valeur de DEPART est
+// volontairement fixee au TIERS de ce calcul (Kp = 1), parce que L et C
+// restent des estimations et que le calcul ne vaut qu'au point mesure.
+//
+// METHODE D'AFFINAGE : monter d'UN decalage a la fois, et observer le CREUX
+// DE BRANCHEMENT de la charge, pas le delestage. Meme information dynamique,
+// energie bien plus faible, et aucun risque d'approcher les 55 V pendant la
+// recherche. Symptome d'un Kp excessif : oscillation entretenue autour de la
+// consigne.
+#define CTRL_KP_SHIFT             0U   // Kp = 1  (prudent : calcul -> 3)
+
+// ---- Resultat mesure avec Kp = 1, le 20/08/2026 ----------------------
+//
+// Meme delestage qu'au releve ci-dessus :
+//   depassement        5,2 V  ->  1,0 V     (marge sous 55 V : 0,8 V -> ~5 V)
+//   extinction         palier de 30 ms+  ->  1,5 ms
+//
+// Sur la marche, un train amorti apparait a 5,19 kHz mesure au curseur.
+// C'EST LE PAS DE REGULATION LUI-MEME (195 us -> 5,13 kHz), PAS UNE
+// INSTABILITE. La distinction est essentielle et se lit sur la frequence :
+//   - une boucle echantillonnee instable oscille a fs/2, soit 2,56 kHz,
+//     un echantillon dessus, le suivant dessous ;
+//   - a fs, on voit la discretisation de la commande : avec Kp = 1 et une
+//     erreur de quelques dizaines de counts, le duty saute de plusieurs
+//     pour-cent en un seul tick, et la serie de sauts s'eteint avec l'erreur.
+// La resonance propre du convertisseur, elle, est ailleurs : L/(1-D)^2 avec
+// 100 uF donne ~445 Hz, soit moins d'une periode sur la fenetre observee.
+//
+// Il reste donc de la marge avant fs/2. Elle n'est PAS consommee, et c'est
+// un choix de conception, pas une precaution : l'etage 1 doit rester LENT
+// devant l'etage 2 (voir la note sur la cascade plus bas). Ne pas monter Kp
+// sans reprendre cette note.
+
+// Gain integral inchange depuis le bring-up : c'est la seule valeur validee
+// en marche, elle sert de reference pendant le reglage de Kp. Il supprime
+// l'erreur statique, il ne fait pas la vitesse -- un integrateur pur retarde
+// de 90 degres a toute frequence, augmenter son gain coute de l'amortis-
+// sement exactement autant que ca rapporte de rapidite. C'est le terme
+// proportionnel qui apporte les deux ensemble.
+#define CTRL_KI_SHIFT            12U   // Ki = 1/4096 par pas
+
+// ---- Terme derive : DESACTIVE ----------------------------------------
+//
+// A 0, le terme n'est pas calcule du tout (compile hors de la boucle).
+//
+// POURQUOI IL RESTE A ZERO, et ce n'est pas une etape a franchir plus tard
+// par principe : la voie V1 est echantillonnee UNE SEULE FOIS par cycle de
+// decoupage, avec une quantification de 25 mV par count. Une derivee sur ce
+// signal amplifie la quantification et le bruit d'echantillonnage bien avant
+// d'apporter de l'amortissement. Un PI suffit sur un boost, et c'est la
+// solution usuelle.
+//
+// Si le besoin s'en faisait sentir, il faudrait d'abord filtrer la mesure --
+// donc rajouter du retard, donc reprendre le reglage de Kp depuis le debut.
+#define CTRL_KD_ENABLE            0
+#define CTRL_KD_SHIFT             0U
+
+// ---- Cascade : pourquoi l'etage 1 doit rester LENT -------------------
+//
+// Un etage 2 regule se comporte, vu de son entree, comme une charge a
+// PUISSANCE CONSTANTE : si V_inter baisse, il tire plus de courant. C'est
+// une resistance differentielle NEGATIVE, environ -500 Ohms a 50 V et 5 W.
+// Deux boucles de vitesses voisines qui s'affrontent a travers ca, c'est le
+// mecanisme classique d'instabilite en cascade.
+//
+// Ce qui protege ici n'est PAS la lenteur de la boucle, c'est le RAPPORT DES
+// CONDENSATEURS : 100 uF sur l'etage 1 contre 1 uF sur l'etage 2. Dans la
+// bande ou l'etage 2 travaille, l'impedance de sortie de l'etage 1 est fixee
+// par son condensateur et non par son correcteur -- 1,6 Ohm a 1 kHz, contre
+// 500 Ohms de charge negative. L'etage 1 est raide par construction, il peut
+// donc se permettre d'etre lent.
+//
+// PLANCHER : "lent" s'arrete la ou l'etage 1 doit repondre pour LUI-MEME,
+// c'est-a-dire son propre delestage, celui qui verrouillait un defaut de
+// survoltage avant l'ajout de P. Kp = 1 satisfait ce plancher avec ~5 V de
+// marge. C'est le critere a revalider si un gain change.
+//
+// ---- CONSEQUENCE POUR L'ETAGE 2, A TRANCHER AVANT DE PEUPLER LE MOSFET --
+//
+// Avec 1 uF au lieu de 100 uF, dV/dt est CENT FOIS plus rapide a puissance
+// comparable : le transitoire de 5 ms mesure sur V1 devient une CINQUANTAINE
+// DE MICROSECONDES sur V_HT. Le pas de regulation valant 195 us, le
+// transitoire est termine AVANT LE PREMIER PAS.
+//
+// Aucun reglage de PID ne peut y repondre -- la boucle arrivera toujours
+// apres. Trois issues, aucune n'est un reglage logiciel :
+//   - augmenter le condensateur de sortie de l'etage 2, pour ramener le
+//     transitoire dans la bande de la boucle ;
+//   - accelerer le pas de regulation de l'etage 2 (couteux, et borne par le
+//     temps d'ISR deja mesure a l'oscilloscope) ;
+//   - s'en remettre au materiel : Trip Zones et seuil a 520 V, qui jouent
+//     deja ce role.
+
+#if CTRL_KD_ENABLE
+#warning "Terme derive actif : la voie V1 n'est echantillonnee qu'une fois par cycle de decoupage, verifier le bruit sur DUTY avant d'y croire."
+#endif
 
 // Periode du pas de regulation, en microsecondes, imposee par le CPU Timer 1.
 // 195 us -> 5128 Hz, soit exactement la cadence qu'obtenait la decimation par
-// 13 des 66,7 kHz de l'ADC : CTRL_SHIFT et les vitesses de rampe gardent donc
+// 13 des 66,7 kHz de l'ADC : les gains PID et les vitesses de rampe gardent donc
 // la meme signification qu'avant le changement de contexte.
 //
 // La regulation a quitte l'ISR ADC : une sequence sur treize, celle-ci
