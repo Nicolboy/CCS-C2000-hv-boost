@@ -168,7 +168,26 @@ void pwm_init(void)
             // EMUSTOP dans safety.c qui garantit la mise a zero.
             p->TBCTL.bit.FREE_SOFT = 0;
 
-            p->TBCTR = 0;
+            // DECALAGE DE PHASE ENTRE LES DEUX ETAGES.
+            //
+            // Les deux compteurs sont charges ICI, TBCLKSYNC etant a zero
+            // (voir plus haut) : ils demarreront donc ensemble, sur la meme
+            // TBCLK, avec un rapport de periode exactement 2:1. La phase qui
+            // en resulte est FIXE et reproductible -- ce n'est pas un alea de
+            // demarrage, c'est un choix, et il doit etre fait.
+            //
+            // Le laisser a zero sur les deux, comme c'etait le cas jusqu'au
+            // 20/08/2026, met les deux commutations AU MEME INSTANT une
+            // periode sur deux : les parasites des deux grilles s'ajoutent.
+            // Visible au scope sur I1, dont une impulsion sur deux porte une
+            // amplitude differente de l'autre.
+            //
+            // PHSEN reste a TB_DISABLE : on ne se sert pas de la chaine de
+            // synchronisation (elle imposerait de toute facon sa cadence a
+            // l'esclave, ce qui ramenerait l'etage 2 a 200 kHz). Le decalage
+            // initial suffit : rien ne resynchronise ensuite, et deux
+            // compteurs issus de la meme horloge ne derivent pas.
+            p->TBCTR = (s == STAGE_2) ? PWM_STAGE2_PHASE_COUNTS : 0U;
             p->TBPHS.half.TBPHS = 0;
 
             p->CMPCTL.bit.SHDWAMODE = CC_SHADOW;

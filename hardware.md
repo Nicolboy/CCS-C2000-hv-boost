@@ -417,15 +417,48 @@ grille, sonnerie DCM (la fréquence collait à 440 kHz, l'amplitude non —
 `Z₀ = √(L/C) ≈ 1200 Ω` ne donne que 125 mA), amplificateur oscillant (il
 amplifiait fidèlement : 100 mV × 34 = 3,4 V).
 
-**Correctif réel, non fait** — par ordre d'efficacité :
+> **Correction du même soir — l'hypothèse Kelvin est réfutée.** Une paire
+> Kelvin torsadée, soudée des pastilles du shunt aux entrées de l'ampli,
+> **n'a rien changé** (crête 1,50 → 1,55 V). Cela élimine d'un coup le cuivre
+> partagé sur le chemin de mesure et la surface de boucle — les deux seuls
+> mécanismes qu'une torsade corrige.
+>
+> **Le parasite s'injecte en aval de l'ampli.** Le raisonnement est
+> arithmétique : l'ampli est limité à τ = 3,3 µs par son condensateur de
+> contre-réaction ; il lui est impossible de restituer une impulsion de
+> 150 ns arrivée par ses entrées. Puisqu'elle sort quand même, elle est
+> injectée sur la piste, la broche, ou l'alimentation de l'AOP.
+>
+> **Correctif trouvé : 10 nF sur la broche**, en aval des 100 Ω de sortie
+> d'ampli (τ = 1 µs). Crête divisée par 2,5, et surtout : la montée à
+> **500 V** a ensuite donné des crêtes à **0,55 V** pour un seuil à 2,351 V,
+> soit une marge de 4. C'est ce condensateur qui a débloqué la tension
+> nominale.
 
-1. fils de mesure partant des **pastilles** du shunt, aucun cuivre partagé
-   avec le retour de puissance ;
-2. shunt à quatre bornes, ou modèle non inductif ;
-3. boucle de mesure sans surface — pistes serrées ou torsadées.
+**L'offset négatif, lui, reste inexpliqué.** Il se présente comme un signal
+différentiel, indiscernable du courant — aucun filtrage ne le corrigera. Les
+pistes de routage (prise Kelvin, shunt quatre bornes, boucle sans surface)
+restent souhaitables, mais elles ne sont plus le sujet du déclenchement.
 
-Aucun filtrage ne corrigera l'offset : il se présente comme un signal
-**différentiel**, indiscernable du courant.
+### Le déclenchement est stochastique — ne pas filtrer davantage
+
+Relevé sur 4 s à 500 ms/div : l'enveloppe est **stationnaire**. Pas de
+dérive, pas d'oscillation croissante, pas d'escalier — **le convertisseur ne
+s'emballe pas**.
+
+Mais ses crêtes chevauchent le seuil en permanence. Ce qui empêche une
+coupure immédiate est `SAFETY_COMP_QUALSEL = 31`, qui exige ~0,5 µs de
+dépassement **continu** : la quasi-totalité des pointes sont plus brèves et
+sont rejetées. De loin en loin l'une est assez large et passe.
+
+D'où le délai aléatoire observé — 1 s, 4 s, 5-6 s — qui est une **loi de
+probabilité**, pas un mécanisme. Et d'où le fait que chaque filtrage
+supplémentaire rallonge le délai sans rien régler : on déplace la
+distribution, sa queue atteint toujours le seuil.
+
+Les deux réponses réelles : le **blanking** (masquer le comparateur pendant
+la commutation — à vérifier dans le TRM, `TZSEL.DCAEVT1` prend aujourd'hui
+l'événement non filtré), ou la réduction du parasite à sa source.
 
 ### Condensateurs de contre-réaction sur les amplis de shunt — **posés le 20/08/2026**
 
@@ -474,11 +507,17 @@ Par ordre de priorité.
       l'ADC** à deux tensions, seule façon de séparer gain et offset.
 - [ ] **IIN** — un second point vers 1 à 2 A (le point V0.2 actuel est à
       0,27 A, il ne verrouille pas l'absence d'offset).
-- [x] ~~**VOUT**~~ — faite le 20/08/2026 : `Vadc × 177,0 + 1,70`. **Point à
-      200 V confirmé** le même soir : multimètre 200,4 V contre 200,0 V
-      affichés, soit 0,2 % — moins de trois counts d'ADC. La loi ajustée sur
-      12 et 49 V tient donc à un facteur quatre au-delà de son dernier point.
-      Reste le haut d'échelle, un point vers 400-500 V.
+- [x] ~~**VOUT**~~ — **étalonnage CLOS le 20/08/2026** : `Vadc × 177,0 + 1,70`,
+      vérifiée sur **quatre points de 12,65 à 500 V** — un rapport 40 — avec
+      au pire 0,4 % d'écart (200,4 contre 200,0 ; 500 au multimètre contre
+      500-502 affichés). Plus aucune extrapolation. La coupure à 520 V
+      s'appuie donc sur une chaîne vérifiée jusqu'au voisinage immédiat du
+      seuil.
+- [ ] ⚠️ **Caractériser le délestage à 500 V.** Il ne reste que **20 V**
+      entre la consigne maximale et le seuil, soit 4 %. Le dépassement mesuré
+      sur l'étage 1 après correction du PID était de 2 % — mais l'étage 2,
+      dont le condensateur est cent fois plus petit, n'a jamais été testé en
+      délestage. Scope armé obligatoire.
 - [ ] 🔴 **Reprendre la prise Kelvin des deux shunts** — voir la section
       dédiée. Défaut compris le 20/08/2026, présent sur les **deux** étages,
       contourné par filtrage mais non corrigé. C'est lui qui rend le seuil de

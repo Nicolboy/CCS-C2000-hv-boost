@@ -136,8 +136,22 @@
 // bas d'echelle. Rappel de ce qui a ete evite : avec l'ancienne constante de
 // 181,82, cette meme "coupure a 520 V" agissait en realite vers 347 V.
 //
-// RESTE A FAIRE : un point vers 400-500 V le jour ou on y montera. La chaine
-// est validee a 12, 49 et 200 V ; le haut de l'echelle reste extrapole.
+// POINT A 500 V, LE MEME SOIR -- L'ETALONNAGE EST CLOS.
+// Multimetre 500 V, firmware 500 a 502 V. La loi tient donc sur QUATRE
+// points : 12,65 / 49 / 200 / 500 V, soit un rapport 40, avec au pire 0,4 %
+// d'ecart. Aucune extrapolation ne subsiste.
+//
+// Consequence : VOUT_OV_TRIP_RAW, donc la coupure a 520 V, s'appuie
+// desormais sur une chaine verifiee JUSQU'AU VOISINAGE IMMEDIAT du seuil.
+// Elle ne reposait auparavant que sur un calcul -- et l'ancienne constante
+// de 181,82 faisait agir cette meme "coupure a 520 V" vers 347 V.
+//
+// ATTENTION A LA MARGE D'EXPLOITATION : a la consigne maximale de 500 V, il
+// ne reste que 20 V jusqu'au seuil, soit 4 %. Le depassement mesure sur
+// l'etage 1 lors d'un delestage etait de 2 % apres correction du PID ; sur
+// l'etage 2, dont le condensateur est cent fois plus petit, il n'a pas
+// encore ete caracterise. Un delestage a pleine tension reste donc un essai
+// A FAIRE, avec le scope arme.
 //
 // PIEGE DE MESURE, decouvert au banc le 20/08/2026 : le clamp D4 sur le
 // noeud du pont REDRESSE le couplage de decoupage et fabrique jusqu'a
@@ -592,23 +606,62 @@
 // On a empeche l'ampli de transmettre l'artefact au comparateur. On ne
 // l'a pas supprime : le shunt montre toujours ses pointes et son offset.
 //
-// L'OFFSET NEGATIF EST MAINTENANT COMPRIS. -25 a -30 mV releves sur
-// l'etage 2, jumeaux des -34 mV documentes sur l'etage 1 depuis V0.1 et
-// attribues alors, par hypothese, a du "cuivre partage entre l'extremite
-// froide du shunt et le chemin de retour". Le meme defaut sur les DEUX
-// etages n'est plus une hypothese : c'est un defaut de PRISE KELVIN
-// systematique. Il explique tres probablement les 29 % d'ecart inexplique
-// du gain de I1.
+// L'OFFSET NEGATIF reste, lui, non explique : -25 a -30 mV sur l'etage 2,
+// jumeaux des -34 mV documentes sur l'etage 1 depuis V0.1. Le meme ecart
+// sur les DEUX etages n'est pas un hasard, mais l'hypothese du "cuivre
+// partage" n'a PAS ete confirmee -- voir ci-dessous.
 //
-// Aucun condensateur ne le corrigera : cet offset se presente comme un
-// signal differentiel, indiscernable du courant. Correctif reel, par
-// ordre d'efficacite :
-//   - fils de mesure partant des PASTILLES du shunt, aucun cuivre partage
-//     avec le retour de puissance ;
-//   - shunt a quatre bornes, ou modele non inductif ;
-//   - boucle de mesure sans surface (pistes serrees ou torsadees).
-// Tant que ce n'est pas repris, les deux voies portent leur offset et le
-// seuil de 4 A garde une signification approximative.
+// ---- 6. CE QUI A ETE ELIMINE PAR L'ESSAI, ET C'EST LE PLUS UTILE -----
+//
+// Deux modifications successives, le meme soir, ont tranche entre les
+// hypotheses restantes :
+//
+//   a) PAIRE KELVIN TORSADEE, des pastilles du shunt aux entrees de
+//      l'ampli. AUCUN EFFET : crete inchangee, 1,50 -> 1,55 V. Cela elimine
+//      d'un coup le cuivre partage SUR LE CHEMIN DE MESURE et la surface de
+//      boucle -- les deux seuls mecanismes qu'une torsade corrige. La note
+//      qui attribuait l'artefact au defaut de prise Kelvin etait donc
+//      FAUSSE, et elle a ete corrigee ici.
+//
+//   b) 10 nF SUR LA BROCHE, en aval des 100 ohms de sortie d'ampli
+//      (tau = 1 us). CRETE DIVISEE PAR 2,5 : 1,5 -> 0,6 V.
+//
+// Le raisonnement decisif est celui-ci : l'ampli est limite a tau = 3,3 us
+// par son condensateur de contre-reaction. Il lui est PHYSIQUEMENT
+// IMPOSSIBLE de restituer en sortie une impulsion de 150 ns qui serait
+// arrivee par ses entrees. Puisqu'elle y est quand meme, elle est injectee
+// AU NIVEAU DE LA SORTIE OU APRES -- piste, broche, ou alimentation de
+// l'AOP. D'ou l'inefficacite de (a) et l'efficacite de (b).
+//
+// ---- 7. LE DECLENCHEMENT EST STOCHASTIQUE ---------------------------
+//
+// Releve sur 4 secondes a 500 ms/div : l'enveloppe du signal est
+// STATIONNAIRE -- ni derive, ni oscillation croissante, ni escalier. Le
+// convertisseur ne s'emballe pas.
+//
+// Mais ses cretes chevauchent le seuil en permanence. Ce qui empeche une
+// coupure immediate est SAFETY_COMP_QUALSEL = 31, qui exige ~0,5 us de
+// depassement CONTINU : la quasi-totalite des pointes sont plus breves et
+// sont rejetees. De loin en loin, l'une est assez large et passe.
+//
+// D'ou le delai aleatoire observe -- 1 s, 4 s, 5-6 s -- qui est une loi de
+// probabilite et non un mecanisme. Et d'ou le fait que chaque filtrage
+// supplementaire RALLONGE le delai sans jamais regler quoi que ce soit : on
+// deplace la distribution, sa queue atteint toujours le seuil. Une
+// protection qui declenche au bout de dix minutes au lieu de cinq secondes
+// n'est pas plus juste, elle est plus patiente.
+//
+// NE PAS POURSUIVRE DANS CETTE VOIE. Les deux reponses reelles sont :
+//   - le BLANKING : masquer le comparateur pendant la fenetre de
+//     commutation (sous-module Digital Compare, DCFCTL). A VERIFIER DANS LE
+//     TRM : TZSEL.DCAEVT1 prend aujourd'hui l'evenement NON filtre, et rien
+//     ne dit que la fenetre puisse porter sur celui-la sur F2802x ;
+//   - reduire le parasite a sa source, ce qui est un sujet de routage.
+//
+// A NOTER : apres le 10 nF, la montee a 500 V a donne des cretes a 0,55 V
+// pour un seuil a 2,351 V, soit une marge de 4. La loi d'echelle "artefact
+// proportionnel a Vout", tiree des points a 200 et 300 V, ne vaut donc que
+// pour la chaine d'AVANT ce condensateur.
 
 // ---- NTC B57451V5103J062 (PROMPT §5) --------------------------------
 // Montage : 3,3 V -- NTC -- R_fixe -- 0 V, mesure au point milieu.
@@ -1160,26 +1213,72 @@
 // bring-up). TBCLK = SYSCLKOUT = 60 MHz, TBPRD = SYSCLKOUT/Fpwm - 1 :
 //   etage 1 : 200 kHz -> TBPRD = 299
 //   etage 2 : 100 kHz -> TBPRD = 599
-//
-// PHASE ENTRE LES DEUX ETAGES : INDETERMINEE. pwm.c laisse PHSEN a
-// TB_DISABLE, les deux compteurs tournent donc librement. Le rapport 2:1
-// exact et le TBCLK commun font qu'une impulsion de l'etage 1 sur deux
-// coincide avec la commutation de l'etage 2 -- visible au scope sur I1
-// comme une alternance d'amplitude, et l'appareil y mesure 100 kHz sur un
-// signal qui commute a 200.
-//
-// Ce n'est pas un defaut, mais le DECALAGE est fixe au hasard du demarrage
-// des compteurs et change a chaque mise sous tension. Deux consequences :
-// les demarrages successifs ne se ressemblent pas, et surtout adc.c place
-// son declenchement de conversion a un instant precis du cycle, optimise
-// pour I1 -- si l'etage 2 commute juste la, la mesure est polluee ; sinon
-// elle est propre. Au tirage.
-//
-// A REPRENDRE : synchroniser les deux ePWM (SYNCI/SYNCO) avec une phase
-// choisie, 180 degres typiquement. Rendrait le couplage deterministe et
-// eloignerait la commutation de l'etage 2 de l'instant d'echantillonnage.
 #define PWM_STAGE1_FREQ_HZ  200000UL
 #define PWM_STAGE2_FREQ_HZ  100000UL
+
+// ---- DECALAGE DE PHASE DE L'ETAGE 2 ---------------------------------
+//
+// Valeur chargee dans TBCTR de l'ePWM2 pendant que TBCLKSYNC est a zero
+// (pwm.c). Les deux compteurs demarrent ensuite ensemble sur la meme
+// TBCLK, avec un rapport de periode exactement 2:1 : la phase est donc
+// FIXE et reproductible, et ce decalage la choisit une fois pour toutes.
+//
+// RECTIFICATION DU 20/08/2026 : une note precedente affirmait que cette
+// phase etait "fixee au hasard du demarrage". C'est faux -- pwm.c chargeait
+// deja TBCTR = 0 sur LES DEUX, horloges gelees. Le resultat etait pire
+// qu'un alea : les deux commutations tombaient AU MEME INSTANT une periode
+// sur deux, additionnant les parasites des deux grilles. C'est ce qui
+// donnait, au scope sur I1, une impulsion sur deux d'amplitude differente,
+// et 100 kHz mesures sur un signal qui commute a 200.
+//
+// ---- Comment la valeur est choisie ----------------------------------
+//
+// En counts de l'ePWM2 (periode 600). L'etage 1 occupe la meme fenetre
+// avec deux periodes de 300, ses fronts fixes tombent donc a 0 et 300.
+//
+// Fronts, dans ce repere :
+//   etage 1 : 0 et 300           (FIXES, passage a zero)
+//             CMPA1 et 300+CMPA1 (MOBILES, coupure)
+//   etage 2 : la valeur ci-dessous            (FIXE)
+//             + duty2 x 600                   (MOBILE, coupure)
+//
+// CMPA1 = D1 x 300 avec D1 = 1 - Vin/V1. Sur la plage d'entree 10 a 24 V
+// pour V1 = 50 V, D1 va de 0,52 a 0,80, donc CMPA1 balaie 156 a 240 --
+// et son homologue de la seconde periode, 456 a 540.
+//
+// Il reste deux fenetres libres en pire cas : 240-300 et 540-600. On se
+// place au debut de la premiere, l'etage 2 ayant un duty faible (~5 %,
+// soit 30 counts) ses deux fronts y tiennent.
+#define PWM_STAGE2_PHASE_COUNTS  250U
+
+// ---- CE QUE CE DECALAGE NE PEUT PAS FAIRE ---------------------------
+//
+// Il separe les fronts FIXES. Il ne peut rien pour les fronts de COUPURE,
+// qui se deplacent avec le rapport cyclique, donc avec la tension d'entree
+// et avec la charge. Or ce sont eux qui rayonnent le plus : ils
+// interrompent le courant d'inductance.
+//
+// Aucun decalage constant ne les separe a tous les points de
+// fonctionnement -- c'est structurel, pas un defaut de reglage. Les
+// parasites bougeront donc avec la charge, et il faut s'y attendre.
+//
+// Ce qu'on gagne quand meme, et qui justifie la ligne :
+//   - les fronts fixes cessent de s'additionner ;
+//   - la relation entre la commutation de l'etage 2 et l'instant
+//     d'echantillonnage de l'ADC (place par adc.c au milieu de la
+//     conduction de l'etage 1) devient CHOISIE au lieu d'etre subie.
+//
+// LA REPONSE STRUCTURELLE, si le couplage restait genant, serait de
+// ramener les deux etages a la MEME frequence et de les entrelacer a 180
+// degres : le decalage garderait alors son sens a tous les duties. Ca
+// touche au dimensionnement de l'etage 2 (1 uF, mode de conduction), donc
+// ce n'est pas un simple reglage.
+//
+// A REVERIFIER AU SCOPE si Vin, V1 ou une frequence de decoupage change :
+// les fenetres libres ci-dessus sont calculees pour V1 = 50 V.
+#if (PWM_STAGE2_PHASE_COUNTS >= 600U)
+#error "PWM_STAGE2_PHASE_COUNTS doit rester sous la periode de l'etage 2 (600 counts a 100 kHz)."
+#endif
 
 // Liaison UART SCI-A (voir docs/ESP32-UART.md) : 57600 8N1.
 // LSPCLK = SYSCLKOUT/4 (LOSPCP laisse a sa valeur par defaut par InitSysCtrl).
