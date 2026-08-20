@@ -106,6 +106,15 @@ static uint16_t s_settle_count = 0;
 static bool s_vin_armed = false;
 static uint16_t s_vin_uv_count = 0;
 
+#if CTRL_VIN_UV_REARM
+// Pas de regulation consecutifs passes au-dessus du seuil d'armement, defaut
+// de sous-tension verrouille. Remis a zero des que VIN repasse dessous.
+static uint16_t s_vin_rearm_count = 0U;
+// Tentatives deja consommees. Remis a zero seulement par un etablissement
+// reel (entree en CTRL_STATE_RUN) ou par control_init().
+static uint16_t s_vin_retries = 0U;
+#endif
+
 #if STAGE2_OPENLOOP_TEST
 // Duty fixe de l'essai, converti en counts UNE SEULE FOIS : la periode ePWM
 // n'est connue qu'apres pwm_init(), et une multiplication flottante n'a rien
@@ -295,6 +304,10 @@ void control_init(void)
     s_settle_count = 0;
     s_vin_armed = false;
     s_vin_uv_count = 0U;
+#if CTRL_VIN_UV_REARM
+    s_vin_rearm_count = 0U;
+    s_vin_retries = 0U;
+#endif
 
     both_off();
 }
@@ -514,10 +527,48 @@ void control_tick(void)
         s_state = CTRL_STATE_FAULT;
     }
 
-    // Un defaut est VERROUILLE : seul control_init() en sort.
+    // Un defaut est VERROUILLE. Seule exception, et une seule : la
+    // sous-tension d'entree, qui decrit l'etat de la source et non une
+    // avarie du convertisseur. Voir calib.h pour la justification complete
+    // et pour le plafond de tentatives.
     if (s_state == CTRL_STATE_FAULT)
     {
         both_off();
+
+#if CTRL_VIN_UV_REARM
+        if (s_fault == FAULT_UNDERVOLTAGE_VIN
+            && s_vin_retries < CTRL_VIN_UV_MAX_RETRIES)
+        {
+            // Le seuil teste est celui d'ARMEMENT (12 V), pas celui de
+            // coupure (9,5 V) : les 2,5 V d'ecart sont l'hysteresis qui
+            // interdit le battement.
+            if ((int32_t)adc_get_raw(ADC_CH_VIN) > VIN_UV_ARM_RAW)
+            {
+                s_vin_rearm_count++;
+            }
+            else
+            {
+                s_vin_rearm_count = 0U; // il faut une duree CONTINUE
+            }
+
+            if (s_vin_rearm_count >= CTRL_VIN_UV_REARM_STEPS)
+            {
+                s_vin_rearm_count = 0U;
+                s_vin_retries++;
+
+                // Retour a IDLE et NON reprise en l'etat : le pas suivant
+                // repartira de la tension mesuree avec un accumulateur nul,
+                // donc par la sequence de demarrage complete. Reprendre en
+                // cours de rampe reimposerait le duty d'avant la coupure sur
+                // une sortie qui s'est videe entre-temps -- le courant
+                // d'inductance s'emballe alors en quelques periodes (constate
+                // en debogage, cf. le chemin EMUSTOP de main.c).
+                s_fault = FAULT_NONE;
+                s_vin_uv_count = 0U;
+                s_state = CTRL_STATE_IDLE;
+            }
+        }
+#endif
         return;
     }
 
@@ -605,6 +656,14 @@ void control_tick(void)
 
     case CTRL_STATE_RUN:
     default:
+#if CTRL_VIN_UV_REARM
+        // Le regime etabli est atteint : les tentatives de rearmement
+        // consommees sont rendues. Ecrit a chaque pas plutot que sur la
+        // transition -- c'est idempotent, et ca couvre du meme coup les deux
+        // chemins d'entree dans cet etat (avec et sans etage 2).
+        s_vin_retries = 0U;
+#endif
+
         // Regime etabli. Les rampes restent actives : un changement de
         // consigne en marche est suivi progressivement, ce qui est
         // exactement le cas d'usage des essais par paliers.

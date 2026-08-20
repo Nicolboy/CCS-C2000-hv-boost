@@ -838,6 +838,43 @@
 // un cycle d'alimentation complet.
 #define CTRL_VIN_UV_COUNTS        5U
 
+// ---- REARMEMENT AUTOMATIQUE, SOUS-TENSION D'ENTREE UNIQUEMENT --------
+//
+// A 1, un defaut FAULT_UNDERVOLTAGE_VIN se deverrouille tout seul quand
+// l'alimentation d'entree est franchement revenue. LES AUTRES DEFAUTS NE
+// SONT PAS CONCERNES et ne doivent pas l'etre : surintensite, surtension et
+// surtemperature signalent une avarie ou un fonctionnement hors domaine,
+// dont la disparition apparente ne prouve rien.
+//
+// POURQUOI CELUI-LA PEUT L'ETRE : la sous-tension d'entree decrit l'etat de
+// la SOURCE, pas du convertisseur. Rien n'a ete endommage, et le seuil de
+// coupure (9,5 V) est deja separe du seuil d'armement (12,0 V) par 2,5 V
+// d'hysteresis -- de quoi exclure tout battement.
+//
+// LE PIEGE, ET POURQUOI IL Y A UN PLAFOND DE TENTATIVES : si Vin s'effondre
+// PARCE QUE le convertisseur tire trop, le rearmement cree une boucle
+// demarrage -> appel de courant -> effondrement -> coupure -> demarrage.
+// Chaque cycle repasse par la rampe complete, donc par le duty le plus
+// eleve, sur un MOSFET qui n'a pas refroidi. Pire : il masquerait une source
+// sous-dimensionnee en la transformant en clignotement. Apres
+// CTRL_VIN_UV_MAX_RETRIES tentatives, ce n'est plus un incident mais un
+// diagnostic -- le defaut se verrouille pour de bon.
+#define CTRL_VIN_UV_REARM         1
+
+// Duree pendant laquelle VIN doit rester au-dessus de CTRL_VIN_UV_ARM_V
+// avant de rearmer, en pas de regulation (~5,13 kHz). 2560 -> ~500 ms.
+// Ce n'est pas de l'anti-rebond mais une exigence de STABILITE : un simple
+// franchissement instantane serait satisfait par le rebond d'une source qui
+// vient justement de s'effondrer.
+#define CTRL_VIN_UV_REARM_STEPS   2560U
+
+// Le compteur est remis a zero des que la machine atteint CTRL_STATE_RUN,
+// c'est-a-dire apres un etablissement REEL de l'etage 1 (rampe terminee et
+// ecart sous tolerance pendant CTRL_SETTLE_STEPS). Une source correcte qui
+// bronche une fois par heure ne verrouillera donc jamais, alors qu'un cycle
+// qui n'atteint jamais le regime etabli s'arrete au bout de trois essais.
+#define CTRL_VIN_UV_MAX_RETRIES   3U
+
 // ---- Limites de rapport cyclique ------------------------------------
 // duty max < 1 imperativement : a 500 V depuis 35 V il faut deja D = 0,93,
 // la marge est donc mince. duty min a 0 : un boost a 0 % laisse malgre tout
