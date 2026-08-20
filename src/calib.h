@@ -121,9 +121,23 @@
 // L'ANCIENNE VALEUR 181,82 ETAIT UNE VALEUR DE CONCEPTION, jamais mesuree,
 // et elle ignorait la LED : 2,7 % de gain en trop, plus 1,7 V manquants.
 //
-// A REPRENDRE avec un point vers 200 V le jour ou l'etage 2 tournera : ces
-// deux points sont a 12 et 49 V pour une chaine qui doit mesurer jusqu'a
-// 500, et le seuil de coupure en depend.
+// POINT A 200 V, RELEVE LE 20/08/2026 -- premier regime etabli de l'etage 2,
+// a vide : multimetre 200,4 V, firmware 200,0 V. Ecart 0,2 %.
+//
+// La loi ajustee sur 12 et 49 V tient donc a un facteur QUATRE au-dela de
+// son dernier point, ce qui n'allait pas de soi : c'est une extrapolation
+// qui a ete verifiee, pas supposee. Les 0,4 V representent moins de TROIS
+// counts d'ADC (un count vaut 0,142 V de sortie a ce niveau) -- l'ecart est
+// au niveau de la quantification, il n'y a rien a corriger et affiner
+// deplacerait le seuil de survoltage sans rien gagner.
+//
+// Consequence directe : VOUT_OV_TRIP_RAW, donc la coupure a 520 V, s'appuie
+// desormais sur une chaine verifiee en son milieu et non plus seulement en
+// bas d'echelle. Rappel de ce qui a ete evite : avec l'ancienne constante de
+// 181,82, cette meme "coupure a 520 V" agissait en realite vers 347 V.
+//
+// RESTE A FAIRE : un point vers 400-500 V le jour ou on y montera. La chaine
+// est validee a 12, 49 et 200 V ; le haut de l'echelle reste extrapole.
 //
 // PIEGE DE MESURE, decouvert au banc le 20/08/2026 : le clamp D4 sur le
 // noeud du pont REDRESSE le couplage de decoupage et fabrique jusqu'a
@@ -489,7 +503,108 @@
 #define MEAS_I1_OFFSET_V         0.031f  // [V0.2] mesure a RUN=0
 #define MEAS_I1_GAIN_V_PER_A     0.58f   // [V0.2] mesure, deux routes
 #define MEAS_I2_OFFSET_V         0.0f
-#define MEAS_I2_GAIN_V_PER_A     0.637f  // [V0.1] JAMAIS mesure, cf. ci-dessus
+#define MEAS_I2_GAIN_V_PER_A     0.637f  // [V0.2] verifie le 20/08, cf. ci-dessous
+
+// =====================================================================
+// LES DEUX VOIES DE COURANT : ARTEFACT INDUCTIF ET FILTRAGE
+// Soiree du 20/08/2026, premiere mise sous tension de l'etage 2.
+// A lire avant de toucher a un seuil, a un gain ou a un condensateur.
+// =====================================================================
+//
+// ---- 1. LE GAIN DE I2 EST ENFIN VERIFIE ------------------------------
+//
+// Il portait "[V0.1] JAMAIS mesure" depuis l'origine. Trois routes
+// independantes concordent maintenant a 7 % :
+//   - mesure directe : 100 mV aux bornes du shunt -> 3,4 V en sortie -> 34
+//   - schema : montage NON INVERSEUR, 1 + R_f/R_g = 1 + 3300/100    -> 34
+//   - la constante elle-meme : 0,637 / 0,020                        -> 31,9
+// Le seuil de 4 A vaut donc bien environ 4 A. Ce n'etait pas lui le
+// probleme des declenchements de cette soiree.
+//
+// ---- 2. CE QUI DECLENCHAIT : L.di/dt, PAS DU COURANT -----------------
+//
+// Les deux voies presentaient des pointes de ~100 mV aux bornes du shunt,
+// soit 3,4 V en sortie d'ampli -- au-dessus des seuils (2,351 V pour
+// l'etage 1, 2,548 V pour l'etage 2). Le comparateur coupait donc a juste
+// titre sur ce qu'il mesurait. Mais ces 100 mV n'etaient pas du courant :
+//
+//   - forme : etroites, BIPOLAIRES, calees sur les fronts de commutation.
+//     Une chute resistive suivrait la rampe du courant ;
+//   - amplitude : V = L.di/dt = 2 nH x 50 A/us = 100 mV, soit l'inductance
+//     propre d'un shunt CMS et de ses acces ;
+//   - IMPOSSIBILITE ARITHMETIQUE : avec L2 = 440 uH (2 x Coilcraft
+//     MSS1583-224 en serie, valeur confirmee) et 0,5 us de conduction sous
+//     50 V, le courant d'inductance ne peut pas depasser
+//     dI = V.t/L = 57 mA. Les 3,4 V correspondaient a 5,3 A, soit 93 fois
+//     le maximum physiquement atteignable.
+//
+// Fausses pistes ecartees en chemin, pour qu'on ne les reprenne pas :
+// reamorcage de grille, sonnerie DCM (la frequence collait, l'amplitude
+// non : Z0 = sqrt(L/C) ~ 1200 ohms ne donne que 125 mA), ampli oscillant
+// (il amplifiait fidelement : 100 mV x 34 = 3,4 V, au poil).
+//
+// ---- 3. LE CORRECTIF POSE : 1 nF SUR LA CONTRE-REACTION --------------
+//
+// 1 nF en parallele sur R_f = 3,3 kOhm, SUR LES DEUX VOIES.
+//   pole = 1/(2.pi.3300.1e-9) = 48 kHz,  tau = 3,3 us
+//
+// POURQUOI SUR LA CONTRE-REACTION ET PAS ENTRE LES ENTREES. Un essai a
+// 1 nF entre les entrees a fait osciller l'ampli et declencher aussitot,
+// A VIDE. La source est le shunt, 20 mOhm, donc une entree + tenue de
+// facon tres raide : vu du noeud inverseur, ce condensateur est
+// electriquement un condensateur vers la MASSE ALTERNATIVE. Il vient en
+// parallele sur R_g et affaiblit la contre-reaction en haute frequence --
+// pole a 1,6 MHz avec 1 nF, en pleine bande de l'AOP : bosse de gain,
+// marge de phase perdue. A 100 pF le pole est a 16 MHz, donc inoffensif :
+// c'est pour ca que la valeur d'origine tenait.
+// Un condensateur de CONTRE-REACTION, lui, est stabilisant par
+// construction. Et sur un montage non inverseur le gain ne tombe pas a
+// zero mais a UN, ce qui suffit : la pointe ressort a ~1 V au lieu de
+// 3,4 V.
+//
+// ---- 4. LE PRIX PAYE, QU'IL FAUT CONNAITRE ---------------------------
+//
+// 48 kHz est EN DESSOUS des frequences de decoupage (100 et 200 kHz).
+// Gain effectif : 34 en continu, ~12 a 100 kHz, ~2,6 a 1 MHz.
+//
+//   POUR LA TELEMETRIE, c'est un progres : la voie donne le courant MOYEN
+//   et ne depend plus de l'instant d'echantillonnage -- le defaut qui a
+//   fait errer l'etalonnage de IOUT.
+//
+//   POUR LA PROTECTION, c'est un ARBITRAGE : le comparateur coupe
+//   desormais sur la MOYENNE et non sur la CRETE. La contrainte de crete
+//   du MOSFET n'est plus surveillee directement.
+//
+// CE QUI L'AUTORISE, et c'est un calcul, pas une impression :
+//   di/dt max = Vin/L = 50 V / 440 uH = 114 mA/us
+//   -> pendant les 3,3 us du filtre, le courant ne peut bouger que de
+//      380 mA, soit 10 % d'un seuil a 4 A.
+// Une inductance de 440 uH interdit les variations rapides : filtrer a
+// 3,3 us ne coute presque rien en protection reelle. SI L'INDUCTANCE
+// CHANGE, CE RAISONNEMENT EST A REFAIRE.
+//
+// ---- 5. CE QUI N'EST PAS CORRIGE -------------------------------------
+//
+// On a empeche l'ampli de transmettre l'artefact au comparateur. On ne
+// l'a pas supprime : le shunt montre toujours ses pointes et son offset.
+//
+// L'OFFSET NEGATIF EST MAINTENANT COMPRIS. -25 a -30 mV releves sur
+// l'etage 2, jumeaux des -34 mV documentes sur l'etage 1 depuis V0.1 et
+// attribues alors, par hypothese, a du "cuivre partage entre l'extremite
+// froide du shunt et le chemin de retour". Le meme defaut sur les DEUX
+// etages n'est plus une hypothese : c'est un defaut de PRISE KELVIN
+// systematique. Il explique tres probablement les 29 % d'ecart inexplique
+// du gain de I1.
+//
+// Aucun condensateur ne le corrigera : cet offset se presente comme un
+// signal differentiel, indiscernable du courant. Correctif reel, par
+// ordre d'efficacite :
+//   - fils de mesure partant des PASTILLES du shunt, aucun cuivre partage
+//     avec le retour de puissance ;
+//   - shunt a quatre bornes, ou modele non inductif ;
+//   - boucle de mesure sans surface (pistes serrees ou torsadees).
+// Tant que ce n'est pas repris, les deux voies portent leur offset et le
+// seuil de 4 A garde une signification approximative.
 
 // ---- NTC B57451V5103J062 (PROMPT §5) --------------------------------
 // Montage : 3,3 V -- NTC -- R_fixe -- 0 V, mesure au point milieu.
@@ -1041,6 +1156,24 @@
 // bring-up). TBCLK = SYSCLKOUT = 60 MHz, TBPRD = SYSCLKOUT/Fpwm - 1 :
 //   etage 1 : 200 kHz -> TBPRD = 299
 //   etage 2 : 100 kHz -> TBPRD = 599
+//
+// PHASE ENTRE LES DEUX ETAGES : INDETERMINEE. pwm.c laisse PHSEN a
+// TB_DISABLE, les deux compteurs tournent donc librement. Le rapport 2:1
+// exact et le TBCLK commun font qu'une impulsion de l'etage 1 sur deux
+// coincide avec la commutation de l'etage 2 -- visible au scope sur I1
+// comme une alternance d'amplitude, et l'appareil y mesure 100 kHz sur un
+// signal qui commute a 200.
+//
+// Ce n'est pas un defaut, mais le DECALAGE est fixe au hasard du demarrage
+// des compteurs et change a chaque mise sous tension. Deux consequences :
+// les demarrages successifs ne se ressemblent pas, et surtout adc.c place
+// son declenchement de conversion a un instant precis du cycle, optimise
+// pour I1 -- si l'etage 2 commute juste la, la mesure est polluee ; sinon
+// elle est propre. Au tirage.
+//
+// A REPRENDRE : synchroniser les deux ePWM (SYNCI/SYNCO) avec une phase
+// choisie, 180 degres typiquement. Rendrait le couplage deterministe et
+// eloignerait la commutation de l'etage 2 de l'instant d'echantillonnage.
 #define PWM_STAGE1_FREQ_HZ  200000UL
 #define PWM_STAGE2_FREQ_HZ  100000UL
 

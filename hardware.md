@@ -387,6 +387,71 @@ porter l'écart :
 un désaccord du même ordre réapparaît sur I2, dont la chaîne n'a pas été
 refaite : même schéma, mêmes références, shunt toujours à 0,02 Ω.
 
+> **20/08/2026 — l'écart a probablement trouvé son explication.** La première
+> mise sous tension de l'étage 2 a révélé sur son shunt un offset négatif de
+> **−25 à −30 mV**, jumeau des −34 mV de l'étage 1. Le même défaut sur les
+> **deux** étages n'est plus une coïncidence : c'est un défaut de **prise
+> Kelvin systématique**, du cuivre partagé entre l'extrémité froide du shunt
+> et le retour de puissance. Voir la section suivante.
+
+### Prise Kelvin des shunts — **défaut ouvert, compris le 20/08/2026**
+
+Les deux voies de courant présentent, pendant le découpage, des pointes de
+**~100 mV** aux bornes du shunt — soit 3,4 V en sortie d'ampli, au-dessus des
+seuils de coupure (2,351 V sur I1, 2,548 V sur I2). Les comparateurs
+coupaient donc à juste titre sur ce qu'ils mesuraient.
+
+**Ce n'était pas du courant.** Trois arguments concordants :
+
+- **forme** : pointes étroites, **bipolaires**, calées sur les fronts de
+  commutation — une chute résistive suivrait la rampe du courant ;
+- **amplitude** : `V = L·di/dt = 2 nH × 50 A/µs = 100 mV`, soit exactement
+  l'inductance propre d'un shunt CMS et de ses accès ;
+- **impossibilité arithmétique** : avec L2 = **440 µH** (2 × Coilcraft
+  MSS1583-224 en série, valeur confirmée au marquage) et 0,5 µs de conduction
+  sous 50 V, le courant d'inductance ne peut pas dépasser `V·t/L = 57 mA`.
+  Les 3,4 V correspondaient à 5,3 A — **93 fois** le maximum atteignable.
+
+Fausses pistes écartées, pour qu'elles ne soient pas reprises : réamorçage de
+grille, sonnerie DCM (la fréquence collait à 440 kHz, l'amplitude non —
+`Z₀ = √(L/C) ≈ 1200 Ω` ne donne que 125 mA), amplificateur oscillant (il
+amplifiait fidèlement : 100 mV × 34 = 3,4 V).
+
+**Correctif réel, non fait** — par ordre d'efficacité :
+
+1. fils de mesure partant des **pastilles** du shunt, aucun cuivre partagé
+   avec le retour de puissance ;
+2. shunt à quatre bornes, ou modèle non inductif ;
+3. boucle de mesure sans surface — pistes serrées ou torsadées.
+
+Aucun filtrage ne corrigera l'offset : il se présente comme un signal
+**différentiel**, indiscernable du courant.
+
+### Condensateurs de contre-réaction sur les amplis de shunt — **posés le 20/08/2026**
+
+**1 nF en parallèle sur `R_f` = 3,3 kΩ, sur les deux voies.** Pôle à 48 kHz,
+τ = 3,3 µs. La pointe inductive ressort à ~1 V au lieu de 3,4 V, sous les
+seuils.
+
+**Ne jamais mettre cette capacité entre les entrées.** Un essai à 1 nF entre
+les entrées a fait osciller l'ampli et déclencher aussitôt, *à vide*. La
+source est le shunt (20 mΩ), donc une entrée + tenue de façon très raide :
+vu du nœud inverseur, ce condensateur est électriquement un condensateur vers
+la **masse alternative**. Il vient en parallèle sur `R_g` et affaiblit la
+contre-réaction — pôle à 1,6 MHz avec 1 nF, en pleine bande de l'AOP. À
+100 pF le pôle est à 16 MHz, d'où l'innocuité de la valeur d'origine.
+
+Le montage étant **non inverseur**, le gain ne tombe pas à zéro mais à un, ce
+qui suffit largement.
+
+**Le prix payé, à connaître :** 48 kHz est *en dessous* des fréquences de
+découpage (100 et 200 kHz). La protection coupe désormais sur la **moyenne**
+et non sur la **crête** — la contrainte de crête du MOSFET n'est plus
+surveillée directement. Ce qui l'autorise est un calcul :
+`di/dt = Vin/L = 50 V / 440 µH = 114 mA/µs`, donc 380 mA de variation
+possible pendant les 3,3 µs du filtre, soit 10 % d'un seuil à 4 A. **Si
+l'inductance change, ce raisonnement est à refaire.**
+
 **Méthode d'étalonnage retenue** (la seule valide) : en conduction
 continue, le courant d'inductance **à mi-conduction** vaut exactement le
 courant d'entrée — aucune hypothèse sur L, le shunt ou le gain. **Ne jamais
@@ -409,8 +474,21 @@ Par ordre de priorité.
       l'ADC** à deux tensions, seule façon de séparer gain et offset.
 - [ ] **IIN** — un second point vers 1 à 2 A (le point V0.2 actuel est à
       0,27 A, il ne verrouille pas l'absence d'offset).
-- [x] ~~**VOUT**~~ — faite le 20/08/2026 : `Vadc × 177,0 + 1,70`. Reste un
-      point vers 200 V à confirmer quand l'étage 2 tournera.
+- [x] ~~**VOUT**~~ — faite le 20/08/2026 : `Vadc × 177,0 + 1,70`. **Point à
+      200 V confirmé** le même soir : multimètre 200,4 V contre 200,0 V
+      affichés, soit 0,2 % — moins de trois counts d'ADC. La loi ajustée sur
+      12 et 49 V tient donc à un facteur quatre au-delà de son dernier point.
+      Reste le haut d'échelle, un point vers 400-500 V.
+- [ ] 🔴 **Reprendre la prise Kelvin des deux shunts** — voir la section
+      dédiée. Défaut compris le 20/08/2026, présent sur les **deux** étages,
+      contourné par filtrage mais non corrigé. C'est lui qui rend le seuil de
+      4 A approximatif et qui explique probablement les 29 % d'écart de I1.
+- [ ] **Synchroniser les deux ePWM** (`PHSEN` est à `TB_DISABLE`). Le rapport
+      2:1 exact et le TBCLK commun font qu'une impulsion de l'étage 1 sur deux
+      coïncide avec la commutation de l'étage 2, mais le décalage est fixé au
+      hasard du démarrage et change à chaque mise sous tension. `adc.c` place
+      son déclenchement à un instant précis du cycle : selon le tirage, la
+      mesure est propre ou polluée.
 - [ ] 🔴 **Remettre un clamp sur la voie VOUT**, sur la **sortie du suiveur**
       et non sur le nœud du pont. D4 y a été déposée pour pouvoir étalonner :
       sur le nœud, elle redresse le couplage de découpage et fabrique jusqu'à
