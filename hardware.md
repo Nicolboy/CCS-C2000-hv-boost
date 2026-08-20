@@ -489,11 +489,12 @@ Par ordre de priorité.
       hasard du démarrage et change à chaque mise sous tension. `adc.c` place
       son déclenchement à un instant précis du cycle : selon le tirage, la
       mesure est propre ou polluée.
-- [ ] 🔴 **Remettre un clamp sur la voie VOUT**, sur la **sortie du suiveur**
-      et non sur le nœud du pont. D4 y a été déposée pour pouvoir étalonner :
-      sur le nœud, elle redresse le couplage de découpage et fabrique jusqu'à
-      +480 mV de continu, soit 130 V d'erreur. Sans clamp, une ouverture de
-      R10 enverrait le tap vers le rail HT à travers 990 kΩ.
+- [x] ~~**Remettre un clamp sur la voie VOUT**~~ — fait le 20/08/2026 :
+      clamp sur **3,3 V en sortie du suiveur**, et non sur le nœud du pont.
+      C'est le bon emplacement : sur le nœud, D4 redressait le couplage de
+      découpage et fabriquait jusqu'à +480 mV de continu, soit 130 V d'erreur
+      d'affichage ; en sortie de suiveur le signal est basse impédance et
+      propre. L'étalonnage à 200 V a été confirmé **avec** ce clamp en place.
 - [ ] **Sortir LED1 du pont de mesure** et la mettre sur sa propre branche.
       Un boîtier 5 mm traversant en série dans une chaîne d'instrumentation
       apporte une chute non linéaire, une jonction redresseuse et une

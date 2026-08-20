@@ -144,11 +144,15 @@
 // +480 mV de continu -- soit 130 V d'erreur d'affichage. Ces deux points
 // ont ete releves D4 DEPOSEE. Un RC 10k/1nF en amont reduit l'artefact sans
 // le supprimer : les fronts reels sont plus rapides que ce qu'un scope
-// 100 MHz montre, et un 1 nF ceramique cesse de filtrer avant. Le clamp
-// doit etre remis SUR LA SORTIE DU SUIVEUR, ou le signal est basse
-// impedance et propre. Ne jamais retirer un clamp sans le replacer : le
-// pont limite le noeud a 2,92 V au seuil de 520 V, mais si R10 s'ouvre le
-// tap part vers le rail HT a travers 990 kOhm.
+// 100 MHz montre, et un 1 nF ceramique cesse de filtrer avant.
+//
+// RESOLU LE 20/08/2026 : clamp 3,3 V pose SUR LA SORTIE DU SUIVEUR, ou le
+// signal est basse impedance et propre. Le point a 200 V a ete confirme
+// AVEC ce clamp en place -- il ne perturbe pas la mesure, contrairement a
+// D4 sur le noeud du pont. Ne jamais revenir a un clamp sur le noeud, et
+// ne jamais en retirer un sans le replacer : le pont limite le noeud a
+// 2,92 V au seuil de 520 V, mais si R10 s'ouvre le tap part vers le rail
+// HT a travers 990 kOhm.
 #define MEAS_VOUT_GAIN_V_PER_V   177.0f   // broche 14, [V0.2] mesure
 #define MEAS_VOUT_OFFSET_V       1.70f    // chute de LED1, en VOLTS DE SORTIE
 
