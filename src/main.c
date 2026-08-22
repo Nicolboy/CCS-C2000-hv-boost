@@ -440,6 +440,26 @@ void main(void)
 
         status_led_set_state(compute_led_state(&faults));
 
+#if PWM_HRPWM_EDGE_TEST
+        // ESSAI DE FRONT HRPWM (calib.h). Ecrit APRES la machine d'etat, donc
+        // il l'emporte sur enter_safe_state() -- c'est voulu, et c'est sans
+        // danger pour une raison precise :
+        //
+        // la sortie EPWM1A est debridee pour pouvoir etre observee au scope
+        // sur GPIO0, mais Stage1-EN reste BAS. La porte ET inhibe donc
+        // l'entree EN du driver, dont la sortie tombe a l'etat bas, ce qui
+        // bloque le MOSFET (UCC27517 inverseur). Le meme mecanisme a ete
+        // verifie au banc sur l'etage 2 le 20/08/2026.
+        //
+        // Il n'y a donc AUCUNE conversion pendant cet essai : on observe un
+        // signal logique sur une broche du microcontroleur, rien d'autre. Le
+        // duty fige de pwm.c ne peut pas emballer un etage qui ne commute
+        // pas, et la decharge posee par enter_safe_state() reste active.
+        pwm_enable(STAGE_1, true);
+        stage_enable_set(STAGE_1, false);
+        hv_enable_set(false);
+#endif
+
         if (s_send_telemetry)
         {
             telemetry_t t;
@@ -479,6 +499,18 @@ void main(void)
         // Emission en tache de fond : pousse au plus 4 octets (profondeur de
         // la FIFO) puis rend la main. Ne doit jamais retarder la regulation.
         uart_link_service_tx();
+
+        // Entretien de la calibration MEP (HRPWM). Le pas du Micro Edge
+        // Positioner derive avec la temperature de la puce et la tension
+        // d'alimentation ; sans cet appel periodique, HRMSTEP reste fige sur
+        // la valeur relevee au demarrage, a froid.
+        //
+        // ICI et pas ailleurs : la bibliotheque SFO n'est pas reentrante et
+        // elle utilise le calcul flottant, deux raisons de ne jamais
+        // l'appeler depuis une ISR. Un echec ne fait que retirer la partie
+        // fractionnaire du rapport cyclique -- ce n'est pas un defaut de
+        // puissance et ca ne doit rien arreter, d'ou le resultat ignore.
+        (void)pwm_hrpwm_service();
     }
 }
 

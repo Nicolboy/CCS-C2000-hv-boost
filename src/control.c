@@ -190,11 +190,32 @@ static int32_t shl_signed(int32_t v, uint16_t n)
 // Le terme derive est compile hors de la boucle tant que CTRL_KD_ENABLE
 // vaut 0 -- il ne coute alors pas un cycle.
 //
+// ---- UNITE DE SORTIE : Q8 COUNTS (depuis le 22/08/2026, HRPWM) --------
+//
+// Le rapport cyclique sort maintenant avec PWM_DUTY_FRAC_BITS bits de
+// partie fractionnaire, que pwm.c porte dans CMPAHR. Sans cette partie
+// fractionnaire, un count de l'etage 2 vaut 8,3 V de sortie et la boucle ne
+// peut que battre entre deux valeurs entieres (voir calib.h).
+//
+// LES GAINS N'ONT PAS CHANGE DE SENS. CTRL_KP_SHIFT et CTRL_KI_SHIFT
+// gardent exactement la definition sous laquelle ils ont ete regles au banc
+// le 20/08 -- un gain exprime en COUNTS ENTIERS par count d'erreur. Le
+// passage en Q8 est fait ici, au dernier moment, par le seul decalage
+// supplementaire de PWM_DUTY_FRAC_BITS. Il n'y a donc rien a re-regler.
+//
+// Consequence a noter sur l'integrateur : sa borne est INCHANGEE. i_term
+// vaut accum >> (KI_SHIFT - FRAC) au lieu de accum >> KI_SHIFT, et sa
+// borne doit valoir duty_max_q8 = duty_max << FRAC ; les deux decalages se
+// compensent exactement et s_accum_max reste duty_max << KI_SHIFT.
+//
 // Renvoie l'erreur, dont l'appelant se sert pour juger de l'etablissement.
+#if (CTRL_KI_SHIFT <= PWM_DUTY_FRAC_BITS)
+#error "CTRL_KI_SHIFT doit rester superieur a PWM_DUTY_FRAC_BITS : le decalage du terme integral deviendrait negatif."
+#endif
 static int32_t regulate(uint16_t i, int32_t measured_raw)
 {
     int32_t error = (s_ramp_q8[i] >> RAMP_FRAC_BITS) - measured_raw;
-    int32_t duty_max = (int32_t)s_duty_max_counts[i];
+    int32_t duty_max = ((int32_t)s_duty_max_counts[i]) << PWM_DUTY_FRAC_BITS;
     int32_t accum_prev = s_accum[i];
     int32_t p_term;
     int32_t i_term;
@@ -205,7 +226,7 @@ static int32_t regulate(uint16_t i, int32_t measured_raw)
     // Agit dans le pas MEME ou l'ecart apparait. C'est lui, et lui seul, qui
     // peut repondre a un delestage : l'integrateur, par construction, a
     // besoin de plusieurs pas pour batir sa correction.
-    p_term = shl_signed(error, CTRL_KP_SHIFT);
+    p_term = shl_signed(error, CTRL_KP_SHIFT + PWM_DUTY_FRAC_BITS);
 
     // ---- I : integral ---------------------------------------------------
     // Supprime l'erreur statique. L'accumulateur est borne aux memes limites
@@ -220,11 +241,11 @@ static int32_t regulate(uint16_t i, int32_t measured_raw)
     {
         s_accum[i] = s_accum_max[i];
     }
-    i_term = s_accum[i] >> CTRL_KI_SHIFT;
+    i_term = s_accum[i] >> (CTRL_KI_SHIFT - PWM_DUTY_FRAC_BITS);
 
     // ---- D : derive ------------------------------------------------------
 #if CTRL_KD_ENABLE
-    d_term = shl_signed(error - s_prev_error[i], CTRL_KD_SHIFT);
+    d_term = shl_signed(error - s_prev_error[i], CTRL_KD_SHIFT + PWM_DUTY_FRAC_BITS);
     s_prev_error[i] = error;
 #else
     d_term = 0;
@@ -243,7 +264,7 @@ static int32_t regulate(uint16_t i, int32_t measured_raw)
     if (duty > duty_max || duty < 0)
     {
         s_accum[i] = accum_prev;
-        i_term = accum_prev >> CTRL_KI_SHIFT;
+        i_term = accum_prev >> (CTRL_KI_SHIFT - PWM_DUTY_FRAC_BITS);
         duty = p_term + i_term + d_term;
 
         if (duty > duty_max)
@@ -256,7 +277,7 @@ static int32_t regulate(uint16_t i, int32_t measured_raw)
         }
     }
 
-    pwm_set_duty_counts(k_stages[i], (uint16_t)duty);
+    pwm_set_duty_q8(k_stages[i], (uint32_t)duty);
 
     return error;
 }

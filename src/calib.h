@@ -1280,6 +1280,118 @@
 #error "PWM_STAGE2_PHASE_COUNTS doit rester sous la periode de l'etage 2 (600 counts a 100 kHz)."
 #endif
 
+// =====================================================================
+// HRPWM -- RESOLUTION FINE DU RAPPORT CYCLIQUE
+// =====================================================================
+//
+// POURQUOI. Ce n'est pas un raffinement, c'est la reponse a un mode de
+// panne mesure au banc le 22/08/2026.
+//
+// La sensibilite d'un boost est dV/dD = Vin / (1-D)^2. Elle explose quand
+// D approche 1, et c'est la que travaille l'etage 2 :
+//
+//   etage      Vin    Vout   D      periode   dV/dD      UN COUNT VAUT
+//   -------------------------------------------------------------------
+//   etage 1    20 V   50 V   0,60   300       125 V      0,42 V  (0,83 %)
+//   etage 2    50 V   500 V  0,90   600       5000 V     8,3 V   (1,7 %)
+//
+// L'etage 2 doit donc tenir 500 V avec un quantum de 8,3 V. AUCUNE valeur
+// entiere de CMPA ne donne la bonne tension : la regulation bascule en
+// permanence entre deux counts adjacents. Ce n'est pas un defaut de
+// reglage du PID -- les gains choisissent VERS QUEL count on bascule, pas
+// la taille du count.
+//
+// Et chaque bascule d'un count a D = 0,9 rompt l'equilibre volt-seconde de
+// pres de 2 %. L'inductance integre ce residu pendant les 195 us ou la
+// commande est figee (CTRL_TICK_PERIOD_US) : le courant monte en escalier
+// geometrique, +13 % par periode de decoupage releve au scope, soit un
+// facteur 5 en 130 us. La plupart de ces escaliers avortent ; certains
+// atteignent le seuil du comparateur et coupent la carte.
+//
+// C'est ce qui produisait les declenchements "ponctuels" a 400 V sur 50
+// kOhm -- donc a 3,2 W, charge negligeable. Ce n'etait ni la puissance, ni
+// la charge, ni l'artefact inductif de la chaine de mesure : c'etait la
+// quantification du rapport cyclique.
+//
+// ---- CE QUE HRPWM APPORTE -------------------------------------------
+//
+// Le MEP (Micro Edge Positioner) subdivise un count de TBCLK en pas
+// d'environ 150 ps. A 60 MHz un count vaut 16,67 ns, soit ~111 pas MEP.
+// Le quantum de l'etage 2 passe donc de 8,3 V a environ 0,075 V.
+//
+// ---- CE QUE HRPWM N'APPORTE PAS -------------------------------------
+//
+// Rien contre les 195 us d'aveuglement entre deux pas de regulation. Un
+// transitoire de charge plus rapide que le pas reste non regule, et
+// l'escalier reste possible s'il est amorce par autre chose que la
+// quantification. La reponse a CE probleme est le mode courant crete
+// (comparateur route vers CBC au lieu de OST), qui reste a faire.
+//
+// HRPWM traite la cause d'aujourd'hui. Il ne rend pas la boucle rapide.
+//
+// ---- MISE EN OEUVRE --------------------------------------------------
+//
+// HRPWM n'existe que sur les sorties EPWMxA : les deux etages sont
+// eligibles tels que routes (GPIO0 = EPWM1A, GPIO2 = EPWM2A).
+//
+// Le rapport cyclique circule maintenant en Q8 counts dans control.c et
+// pwm.c : les 8 bits de poids faible sont la partie fractionnaire, portee
+// par CMPAHR. 256 valeurs demandees pour ~111 pas MEP reels -- la
+// redondance est sans consequence, le materiel arrondit.
+#define PWM_DUTY_FRAC_BITS   8U
+
+// Activation PAR ETAGE, pour pouvoir monter en deux temps au banc.
+//
+// L'etage 1 n'a PAS le probleme : 0,42 V par count, c'est deja fin.
+// On l'active d'abord parce que c'est l'etage basse tension, celui ou une
+// erreur de configuration se paie en observation et non en composant.
+// N'attends aucune amelioration visible de son comportement : c'est une
+// repetition du mecanisme, pas un correctif.
+#define PWM_HRPWM_STAGE1     1
+#define PWM_HRPWM_STAGE2     0
+
+// ---- QUEL FRONT LE MEP DOIT-IL DEPLACER ? ---------------------------
+//
+// LE POINT A VERIFIER AU BANC AVANT TOUTE MISE EN PUISSANCE. Se tromper
+// ici est pire que de ne pas avoir HRPWM du tout.
+//
+// La conduction du MOSFET est bornee par deux fronts : celui de CTR = 0
+// (fixe) et celui de CMPA (mobile). Seul le second est gouverne par
+// CMPAHR. Si EDGMODE designe l'autre, le reglage fin s'applique a un front
+// que CMPA ne commande pas : la partie fractionnaire agit alors EN SENS
+// INVERSE de la partie entiere, et le rapport cyclique cesse d'etre une
+// fonction croissante de la consigne. Une boucle fermee sur une commande
+// non monotone ne converge pas.
+//
+// La difficulte vient de DBCTL.POLSEL = DB_ACTV_LO (driver UCC27517
+// inverseur, cf. pwm.c) : le front descendant de la broche n'est pas le
+// front descendant de l'Action Qualifier. Selon que le MEP est insere en
+// amont ou en aval du sous-module Dead-Band, la bonne valeur est HR_FEP ou
+// HR_REP -- et c'est exactement le genre de detail de chainage qui nous a
+// deja coute une hypothese sur TZCTL.
+//
+// On ne le tranche pas sur documentation : PWM_HRPWM_EDGE_TEST fige un
+// duty et laisse balayer la seule partie fractionnaire depuis le
+// debogueur. Le front qui bouge au scope donne la reponse en deux minutes,
+// sans puissance, sans risque.
+#define PWM_HRPWM_EDGMODE    HR_FEP
+
+// Banc uniquement : expose g_hr_test_coarse et g_hr_test_frac, ecrits
+// depuis le debogueur, et court-circuite le rapport cyclique de l'etage 1.
+// DOIT rester a 0 en fonctionnement -- la regulation est alors ignoree sur
+// cet etage.
+#define PWM_HRPWM_EDGE_TEST  1
+
+// Le MEP ne fonctionne pas si l'impulsion est trop courte ou trop proche
+// de la periode : le TRM impose une marge de quelques cycles SYSCLK de
+// part et d'autre. En dehors de cette plage on retombe sur la resolution
+// entiere, ce qui est sans danger -- c'est le comportement d'avant.
+#define PWM_HRPWM_GUARD_COUNTS  3U
+
+#if (PWM_DUTY_FRAC_BITS != 8U)
+#error "CMPAHR attend une fraction en Q16 : la conversion Q8 -> Q16 de pwm.c suppose 8 bits."
+#endif
+
 // Liaison UART SCI-A (voir docs/ESP32-UART.md) : 57600 8N1.
 // LSPCLK = SYSCLKOUT/4 (LOSPCP laisse a sa valeur par defaut par InitSysCtrl).
 #define UART_BAUD_RATE      57600UL

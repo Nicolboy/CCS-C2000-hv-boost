@@ -1,20 +1,15 @@
 #include "DSP28x_Project.h"
 #include "pwm.h"
 #include "calib.h"
+#include "sfo_v6.h"
 
 // Mode up-count, TBCLK = SYSCLKOUT = 60 MHz (HSPCLKDIV = CLKDIV = /1).
 // TBPRD = SYSCLKOUT / Fpwm - 1  ->  299 a 200 kHz, 599 a 100 kHz.
 //
-// HRPWM : volontairement NON implemente a ce stade (PROMPT §6 etape 6), mais
-// le routage et la structure s'y pretent. Notes pour l'ajout ulterieur :
-//  - HRPWM n'existe que sur les sorties EPWMxA : les deux etages sont donc
-//    compatibles tels que routes (GPIO0 et GPIO2).
-//  - SYSCLKOUT >= 50 MHz requis (60 MHz ici), MEP 150-310 ps, SFO obligatoire.
-//  - Limitation de 3 cycles SYSCLK sur le rapport cyclique : a 200 kHz cela
-//    donne un duty min ~0,67 % et max ~99 %, a confronter aux points de
-//    fonctionnement de l'etage 1 (D ~ 0,8).
-//  - A 100 kHz sans HRPWM : 600 pas ~ 9,2 bits, risque de limit cycling en
-//    boucle fermee. C'est l'etage 2 (D ~ 0,875) qui est le plus concerne.
+// HRPWM : implemente le 22/08/2026. Le POURQUOI est dans calib.h (bloc
+// "HRPWM -- RESOLUTION FINE DU RAPPORT CYCLIQUE") -- en un mot, a D = 0,9 un
+// count de l'etage 2 vaut 8,3 V de sortie, et la regulation ne peut alors
+// que battre entre deux counts. Ici, le COMMENT.
 
 typedef struct
 {
@@ -24,6 +19,66 @@ typedef struct
 } pwm_stage_t;
 
 static pwm_stage_t s_stage[2];
+
+// =====================================================================
+// SYMBOLES EXIGES PAR LA BIBLIOTHEQUE SFO
+// =====================================================================
+//
+// SFO_TI_Build_V6.lib laisse exactement trois symboles indefinis :
+// _EPwm1Regs, _MEP_ScaleFactor et _ePWM (releve a nm2000). Les deux
+// derniers sont a notre charge, et leurs NOMS SONT IMPOSES -- ni statiques,
+// ni renommables.
+//
+// MEP_ScaleFactor : nombre de pas MEP dans un cycle de TBCLK, ecrit par
+// SFO() et recopie par elle dans EPwm1Regs.HRMSTEP. C'est HRMSTEP que le
+// materiel utilise pour convertir la fraction de CMPAHR en pas MEP quand
+// AUTOCONV est arme. Valeur attendue a 60 MHz : 16,67 ns / ~150 ps, soit
+// de l'ordre de 100 a 110. Au-dela de 255 la conversion automatique ne
+// fonctionne plus et SFO() renvoie SFO_ERROR.
+int MEP_ScaleFactor;
+
+// Tableau impose par la bibliotheque, PWM_CH = 5 entrees (sfo_v6.h).
+// L'indice 0 est un emplacement mort dans la convention de TI, et la
+// calibration se fait sur l'indice 1.
+//
+// LE F28027 A QUATRE MODULES ePWM, MAIS SEULS LES DEUX PREMIERS ONT LEUR
+// HORLOGE ARMEE ICI (PCLKCR1, voir pwm_init). L'exemple de TI place
+// EPwm3Regs et EPwm4Regs dans les deux dernieres cases ; les reprendre
+// telles quelles ferait acceder la bibliotheque a des peripheriques non
+// horloges, dont les acces sont sans effet et les lectures sans garantie.
+// On y remet donc EPwm1Regs : si la bibliotheque ne s'en sert pas, c'est
+// sans consequence ; si elle s'en sert, elle tombe sur un module valide.
+volatile struct EPWM_REGS *ePWM[PWM_CH] = {
+    &EPwm1Regs, &EPwm1Regs, &EPwm2Regs, &EPwm1Regs, &EPwm1Regs};
+
+#if PWM_HRPWM_EDGE_TEST
+// ESSAI DE FRONT, BANC UNIQUEMENT (PWM_HRPWM_EDGE_TEST, calib.h).
+//
+// A ecrire depuis le debogueur. g_hr_test_coarse fige la partie entiere de
+// CMPA sur l'etage 1 ; g_hr_test_frac balaie la SEULE partie fractionnaire,
+// de 0 a 255. Le front qui se deplace au scope designe celui que le MEP
+// commande, donc la bonne valeur de PWM_HRPWM_EDGMODE.
+//
+// volatile et NON static : le symbole doit survivre a l'optimisation et
+// rester accessible au debogueur.
+volatile uint16_t g_hr_test_coarse = 150U; // 50 % a 200 kHz
+volatile uint16_t g_hr_test_frac = 0U;
+#endif
+
+static bool stage_has_hrpwm(stage_id_t stage)
+{
+#if PWM_HRPWM_STAGE1 && PWM_HRPWM_STAGE2
+    (void)stage;
+    return true;
+#elif PWM_HRPWM_STAGE1
+    return (stage == STAGE_1);
+#elif PWM_HRPWM_STAGE2
+    return (stage == STAGE_2);
+#else
+    (void)stage;
+    return false;
+#endif
+}
 
 static volatile struct EPWM_REGS *pwm_regs(stage_id_t stage)
 {
@@ -120,17 +175,23 @@ static void pwm_apply_adc_trigger(volatile struct EPWM_REGS *p)
                   : 1U;
 }
 
+// Calibration MEP valide ? Tant qu'elle ne l'est pas, la partie
+// fractionnaire est IGNOREE et la carte se comporte exactement comme avant
+// HRPWM. C'est le repli voulu : HRMSTEP mal renseigne ne donne pas une
+// resolution approximative, il donne des pas MEP de taille fausse, donc une
+// commande potentiellement non monotone -- pire que pas de HRPWM du tout.
+static bool s_hrpwm_ok = false;
+
 // Recalcule CMPA a partir du duty et du TBPRD courants.
 static void pwm_apply_duty(stage_id_t stage)
 {
     volatile struct EPWM_REGS *p = pwm_regs(stage);
     float duty = s_stage[stage_index(stage)].duty;
-    uint16_t prd = p->TBPRD;
+    uint32_t period_q8 = ((uint32_t)(p->TBPRD + 1U)) << PWM_DUTY_FRAC_BITS;
 
     // En up-count avec AQ_SET a zero et AQ_CLEAR sur CMPA, la sortie est
     // haute pendant CMPA cycles : duty = CMPA / (TBPRD + 1).
-    p->CMPA.half.CMPA = (uint16_t)(duty * (float)(prd + 1U) + 0.5f);
-    pwm_apply_adc_trigger(p);
+    pwm_set_duty_q8(stage, (uint32_t)(duty * (float)period_q8 + 0.5f));
 }
 
 void pwm_init(void)
@@ -227,6 +288,38 @@ void pwm_init(void)
             p->DBCTL.bit.POLSEL = DB_ACTV_LO;
             p->DBCTL.bit.OUT_MODE = DB_FULL_ENABLE; // POLSEL sans effet si bypass
 
+            // ---- HRPWM -------------------------------------------------
+            //
+            // CTLMODE = HR_CMP : la fraction est prise dans CMPAHR (et non
+            // dans TBPHSHR, qui sert au controle haute resolution de la
+            // PERIODE -- ce n'est pas ce qu'on fait).
+            //
+            // HRLOAD = HR_CTR_ZERO : la fraction bascule de l'ombre au
+            // registre actif au passage a zero, comme CMPA et CMPB
+            // (LOADAMODE/LOADBMODE ci-dessus). Les trois doivent basculer au
+            // MEME instant, sinon une periode sortirait avec la partie
+            // entiere d'une consigne et la fraction d'une autre.
+            //
+            // AUTOCONV = 1 : le materiel multiplie lui-meme la fraction par
+            // HRMSTEP pour obtenir le nombre de pas MEP. Sans ce bit il
+            // faudrait faire la multiplication en logiciel, dans l'ISR de
+            // regulation, sur un coeur sans unite flottante.
+            //
+            // HRPE = 0 : pas de controle haute resolution de la periode.
+            //
+            // EDGMODE : voir calib.h, c'est le point a verifier au banc.
+            EALLOW;
+            p->HRCNFG.all = 0U;
+            if (stage_has_hrpwm(s))
+            {
+                p->HRCNFG.bit.EDGMODE = PWM_HRPWM_EDGMODE;
+                p->HRCNFG.bit.CTLMODE = HR_CMP;
+                p->HRCNFG.bit.HRLOAD = HR_CTR_ZERO;
+                p->HRCNFG.bit.AUTOCONV = 1;
+            }
+            p->HRPCTL.bit.HRPE = 0;
+            EDIS;
+
             s_stage[i].duty = 0.0f;
             s_stage[i].enabled = false;
 
@@ -249,6 +342,18 @@ void pwm_init(void)
 
     SysCtrlRegs.PCLKCR0.bit.TBCLKSYNC = 1;
     EDIS;
+
+    // Premiere calibration MEP. Placee ICI, en toute fin d'initialisation :
+    // le module de calibration a besoin des horloges ePWM, donc apres
+    // TBCLKSYNC, et les sorties sont deja forcees a l'etat bloque par
+    // pwm_enable(s, false) -- la boucle d'attente ne laisse donc rien
+    // commuter.
+    //
+    // Le resultat n'est pas teste : un echec laisse simplement s_hrpwm_ok a
+    // false, donc la resolution entiere d'avant. Rien a signaler a
+    // l'operateur en urgence, et surtout rien qui doive empecher la carte
+    // de demarrer.
+    (void)pwm_hrpwm_init();
 }
 
 void pwm_set_freq(stage_id_t stage, uint32_t hz)
@@ -301,22 +406,112 @@ uint16_t pwm_get_period_counts(stage_id_t stage)
 
 void pwm_set_duty_counts(stage_id_t stage, uint16_t counts)
 {
-    volatile struct EPWM_REGS *p = pwm_regs(stage);
-    uint16_t period = (uint16_t)(p->TBPRD + 1U);
+    pwm_set_duty_q8(stage, ((uint32_t)counts) << PWM_DUTY_FRAC_BITS);
+}
 
-    if (counts > period)
+// Ecriture UNIQUE du rapport cyclique. Tout passe par ici -- consigne
+// flottante, consigne entiere, regulation -- pour qu'il n'existe qu'un seul
+// endroit ou CMPA et CMPAHR sont decides ensemble.
+//
+// CMPA et CMPAHR forment un mot de 32 bits, partie entiere en poids fort.
+// L'ecriture se fait EN UN SEUL ACCES 32 bits : ecrire les deux moities
+// separement laisserait, entre les deux instructions, une fraction
+// appartenant a l'ancienne consigne collee a la partie entiere de la
+// nouvelle. Le C28x sait faire cet acces, il n'y a donc rien a payer.
+//
+// La fraction est en Q16 dans CMPAHR alors que la consigne arrive en Q8,
+// d'ou le decalage de 8 : c'est le format qu'attend la conversion
+// automatique (AUTOCONV), qui la multiplie ensuite par HRMSTEP pour obtenir
+// un nombre de pas MEP.
+//
+// PAS de mise a jour de la consigne flottante ici : cette fonction est
+// appelee depuis l'ISR de regulation, et le F28027 n'a pas d'unite
+// flottante -- une division y coutait plusieurs centaines de cycles et
+// effondrait la cadence de l'ISR. pwm_get_duty() relit CMPA, la telemetrie
+// reste donc juste (a la partie fractionnaire pres, qui ne represente
+// jamais plus d'un count).
+void pwm_set_duty_q8(stage_id_t stage, uint32_t duty_q8)
+{
+    volatile struct EPWM_REGS *p = pwm_regs(stage);
+    uint16_t prd = p->TBPRD;
+    uint32_t max_q8 = ((uint32_t)(prd + 1U)) << PWM_DUTY_FRAC_BITS;
+    uint16_t coarse;
+    uint16_t frac_q16;
+
+    if (duty_q8 > max_q8)
     {
-        counts = period;
+        duty_q8 = max_q8;
     }
 
-    p->CMPA.half.CMPA = counts;
-    pwm_apply_adc_trigger(p);
+    coarse = (uint16_t)(duty_q8 >> PWM_DUTY_FRAC_BITS);
+    frac_q16 = (uint16_t)((duty_q8 & 0xFFUL) << 8);
 
-    // PAS de mise a jour de la consigne flottante ici : cette fonction est
-    // appelee depuis l'ISR ADC a plusieurs dizaines de kHz, et le F28027
-    // n'a pas d'unite flottante -- une division y coutait plusieurs
-    // centaines de cycles et effondrait la cadence de l'ISR.
-    // pwm_get_duty() relit CMPA, la telemetrie reste donc juste.
+#if PWM_HRPWM_EDGE_TEST
+    // Essai de front : la regulation est court-circuitee sur l'etage 1, seul
+    // le debogueur decide. Voir calib.h.
+    if (stage == STAGE_1)
+    {
+        coarse = g_hr_test_coarse;
+        frac_q16 = (uint16_t)(g_hr_test_frac << 8);
+    }
+#endif
+
+    // Le MEP demande quelques cycles SYSCLK de marge de part et d'autre de
+    // l'impulsion. Hors de cette plage on abandonne la partie fractionnaire
+    // plutot que de la confier a un materiel qui ne la respectera pas : on
+    // retombe alors sur la resolution entiere, sans discontinuite.
+    if (!s_hrpwm_ok
+        || !stage_has_hrpwm(stage)
+        || (coarse < PWM_HRPWM_GUARD_COUNTS)
+        || (coarse > (uint16_t)(prd - PWM_HRPWM_GUARD_COUNTS)))
+    {
+        frac_q16 = 0U;
+    }
+
+    p->CMPA.all = ((uint32_t)coarse << 16) | (uint32_t)frac_q16;
+    pwm_apply_adc_trigger(p);
+}
+
+// ---- Calibration MEP -------------------------------------------------
+
+bool pwm_hrpwm_init(void)
+{
+    // Borne explicite : une calibration qui n'aboutit pas ne doit pas figer
+    // la carte au demarrage, sans LED, sans telemetrie et sans explication.
+    // On sort au bout d'un nombre fini d'appels et on tourne sans HRPWM.
+    uint16_t attempts;
+    int status = SFO_INCOMPLETE;
+
+    s_hrpwm_ok = false;
+
+    for (attempts = 0U; attempts < 1000U; attempts++)
+    {
+        status = SFO();
+        if (status == SFO_COMPLETE)
+        {
+            s_hrpwm_ok = true;
+            return true;
+        }
+        if (status == SFO_ERROR)
+        {
+            return false; // plus de 255 pas MEP par count : conversion
+                          // automatique inutilisable
+        }
+    }
+    return false;
+}
+
+bool pwm_hrpwm_service(void)
+{
+    if (SFO() == SFO_ERROR)
+    {
+        // La finesse disparait, la carte continue. Ne JAMAIS couper la
+        // puissance pour ca : une calibration ratee n'est pas un defaut de
+        // puissance, et la commande entiere reste parfaitement valide.
+        s_hrpwm_ok = false;
+        return false;
+    }
+    return true;
 }
 
 void pwm_enable(stage_id_t stage, bool enabled)
