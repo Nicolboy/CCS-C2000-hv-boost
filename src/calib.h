@@ -1347,7 +1347,14 @@
 // erreur de configuration se paie en observation et non en composant.
 // N'attends aucune amelioration visible de son comportement : c'est une
 // repetition du mecanisme, pas un correctif.
-#define PWM_HRPWM_STAGE1     1
+// LAISSES A 0 LE 22/08/2026 AU SOIR. Le code HRPWM est en place et compile,
+// mais PWM_HRPWM_EDGMODE n'a pas ete verifie au scope : tant qu'on ne sait
+// pas quel front le MEP deplace, la partie fractionnaire peut agir en sens
+// inverse de la partie entiere. A 0 sur les deux etages, aucune fraction
+// n'est ecrite dans CMPAHR et la carte se comporte EXACTEMENT comme avant.
+//
+// A remettre a 1 apres l'essai de front, etage 1 d'abord.
+#define PWM_HRPWM_STAGE1     0
 #define PWM_HRPWM_STAGE2     0
 
 // ---- QUEL FRONT LE MEP DOIT-IL DEPLACER ? ---------------------------
@@ -1391,6 +1398,65 @@
 #if (PWM_DUTY_FRAC_BITS != 8U)
 #error "CMPAHR attend une fraction en Q16 : la conversion Q8 -> Q16 de pwm.c suppose 8 bits."
 #endif
+
+// =====================================================================
+// FENETRE DE DEBOGAGE AU DEMARRAGE
+// =====================================================================
+//
+// Duree pendant laquelle la carte tourne dans une boucle vide, SANS AUCUNE
+// interruption, juste avant EINT.
+//
+// POURQUOI. Le C28x met DBGM a 1 a chaque entree d'interruption : le coeur
+// est alors dans du code que le debogueur n'a pas le droit d'arreter. Or
+// cette carte vit en interruption -- ADC toutes les 15 us, regulation
+// toutes les 195 us, plus le timer 10 ms et l'UART. Une fois le firmware
+// lance, la sonde ne trouve pratiquement jamais le coeur dans un etat
+// debogable, et toute reconnexion a froid echoue sur :
+//
+//   Error -1133: Device blocked debug access because it is currently
+//                executing non-debuggable code
+//
+// ---- CE QUI S'EST REELLEMENT PASSE LE 22/08/2026 --------------------
+//
+// A LIRE AVANT DE PERDRE DU TEMPS SUR CE MESSAGE. La cause n'etait PAS
+// la charge d'interruptions, contrairement a ce que ce commentaire a
+// d'abord affirme. Elle etait dans .theia/launch.json, ou l'IDE avait
+// inscrit sur la configuration du dualboost, et sur elle seule :
+//
+//   <property id="AllowInterruptsWhenHalted"><curValue>1</curValue>
+//
+// C'est le MODE TEMPS REEL. Le projet temoin TMS-test-io, lui, n'a aucun
+// launch.json : il prend les defauts, mode temps reel eteint, et se
+// chargeait sans la moindre difficulte sur la MEME carte, avec la MEME
+// sonde, a la MEME minute. Une ligne de configuration, rien d'autre.
+//
+// La boite de dialogue le disait pourtant mot pour mot -- "you may
+// cancel, disable realtime mode, and then attempt to connect". L'option a
+// ete cherchee dans les menus, dans Debugger Properties et dans le
+// .ccxml : les trois endroits ou elle n'est pas. Correctif : supprimer ce
+// bloc debuggerSettings du launch.json.
+//
+// Le Test Connection passait integralement pendant tout ce temps -- chaine
+// de scan saine, IR 38 bits, six motifs d'integrite sans erreur. Quand le
+// JTAG est bon et que la connexion echoue, regarder la CONFIGURATION avant
+// de soupconner le silicium.
+//
+// La fenetre ci-dessous reste utile malgre tout : elle donne une marge
+// franche a la sonde a chaque demarrage, quelle que soit la configuration.
+//
+// Pendant cette fenetre tout est deja configure a l'etat sur : sorties
+// inhibees par AQCSFRC, duty a zero, Trip Zones armees, rien ne convertit.
+// Le coeur ne fait qu'attendre. Le debogueur s'y installe sans effort et
+// sans manipulation materielle.
+//
+// A 0, la temporisation disparait et on retrouve le comportement d'avant,
+// y compris sa difficulte de reconnexion.
+//
+// LE CONTOURNEMENT MANUEL, si cette fenetre venait a etre retiree : tenir
+// RST a la masse pendant la connexion, et le RELACHER avant le chargement.
+// Le maintenir pendant l'ecriture donne "Error -1137: Device is held in
+// reset", qui est le signe qu'on est connecte et qu'il faut lacher.
+#define BOOT_DEBUG_WINDOW_MS    500UL
 
 // Liaison UART SCI-A (voir docs/ESP32-UART.md) : 57600 8N1.
 // LSPCLK = SYSCLKOUT/4 (LOSPCP laisse a sa valeur par defaut par InitSysCtrl).

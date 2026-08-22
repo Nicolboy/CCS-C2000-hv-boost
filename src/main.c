@@ -317,6 +317,22 @@ void main(void)
     // CPU Timer 1 : INT13, cable directement sur le coeur, donc pas de PIEIER.
     IER |= M_INT13;
 
+    // FENETRE DE DEBOGAGE. Voir calib.h pour la justification complete.
+    //
+    // Placee ICI, et nulle part ailleurs : c'est le dernier instant ou le
+    // coeur tourne encore SANS AUCUNE interruption, et le premier ou tout
+    // est deja configure a l'etat sur -- sorties inhibees, duty a zero,
+    // Trip Zones armees. Le debogueur peut s'y installer tranquillement.
+    //
+    // La rendre plus tardive ne servirait a rien : des EINT, l'ISR ADC part
+    // a 15 us de periode et leve DBGM a chaque entree.
+    //
+    // DELAY_US s'appuie sur DSP28x_usDelay, qui s'execute depuis la RAM.
+    // Le memcpy des ramfuncs est fait en tete de main(), bien avant.
+#if BOOT_DEBUG_WINDOW_MS
+    DELAY_US(BOOT_DEBUG_WINDOW_MS * 1000UL);
+#endif
+
     EINT;
     ERTM;
 
