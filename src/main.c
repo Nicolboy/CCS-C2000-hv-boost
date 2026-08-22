@@ -199,7 +199,22 @@ static void enter_safe_state(void)
     s_power_path_armed = false;
 
     control_set_run(false);
+#if !PWM_HRPWM_EDGE_TEST
     pwm_enable(STAGE_1, false);
+#else
+    // ESSAI DE FRONT UNIQUEMENT. La sortie EPWM1A doit commuter en continu
+    // pour etre mesurable : sans cette exception, enter_safe_state() la
+    // remet a l'etat bloque a chaque tour de boucle et le bloc d'essai la
+    // rearme juste apres, ce qui hachait le signal par salves (releve au
+    // scope le 23/08/2026 -- PosDuty lue a 51,03 % au lieu de 50,00 %, le
+    // biais variant avec le temps de boucle).
+    //
+    // LA SECURITE N'EST PAS TOUCHEE : stage_enable_set(STAGE_1, false)
+    // reste appele juste en dessous, la porte ET est donc fermee, le driver
+    // inhibe et le MOSFET bloque. HV_EN est coupe, la decharge est active.
+    // Seule la broche du microcontroleur continue de commuter, et elle ne
+    // va nulle part.
+#endif
     pwm_enable(STAGE_2, false);
     stage_enable_set(STAGE_1, false);
     stage_enable_set(STAGE_2, false);

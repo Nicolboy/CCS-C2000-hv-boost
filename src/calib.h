@@ -1354,7 +1354,18 @@
 // n'est ecrite dans CMPAHR et la carte se comporte EXACTEMENT comme avant.
 //
 // A remettre a 1 apres l'essai de front, etage 1 d'abord.
-#define PWM_HRPWM_STAGE1     0
+// ATTENTION A LA COMBINAISON. PWM_HRPWM_EDGE_TEST ne suffit PAS a lui
+// seul : pwm_set_duty_q8() force la partie fractionnaire a zero des que
+// stage_has_hrpwm() est faux. Avec STAGE1 a 0, g_hr_test_frac n'aurait
+// aucun effet et on conclurait a tort que le MEP ne fonctionne pas.
+// L'essai de front exige donc STAGE1 a 1.
+//
+// ETAGE 1 ACTIF depuis le 23/08/2026, front valide au banc (cf. EDGMODE).
+// ETAGE 2 laisse a 0 : a activer apres verification de l'etage 1 en
+// regulation reelle. Le mecanisme est le meme et l'inversion Dead-Band est
+// identique sur les deux, mais on ne met pas la haute tension en jeu sur
+// une extrapolation.
+#define PWM_HRPWM_STAGE1     1
 #define PWM_HRPWM_STAGE2     0
 
 // ---- QUEL FRONT LE MEP DOIT-IL DEPLACER ? ---------------------------
@@ -1381,13 +1392,50 @@
 // duty et laisse balayer la seule partie fractionnaire depuis le
 // debogueur. Le front qui bouge au scope donne la reponse en deux minutes,
 // sans puissance, sans risque.
-#define PWM_HRPWM_EDGMODE    HR_FEP
+// ---- TRANCHE AU BANC LE 23/08/2026 : HR_REP -------------------------
+//
+// Mesure, duty fige a CMPA = 150 sur TBPRD = 299, donc 50 % exactement :
+//
+//   fraction 0    -> PosDuty broche = 49,985 %   (reference)
+//   fraction 255  -> PosDuty broche = 50,3 %     avec HR_FEP
+//
+// L'ecart est de +0,32 point, soit exactement la magnitude attendue pour
+// 255/256 de count sur 300 (0,33), mais DANS LE MAUVAIS SENS.
+//
+// Le MEP ne sait que RETARDER un front. Si le niveau haut s'allonge, c'est
+// le front DESCENDANT DE LA BROCHE qui a ete retarde -- celui de CTR = 0,
+// que CMPA ne commande pas.
+//
+// HR_FEP a donc fait exactement ce qu'il annonce, un retard du front
+// descendant, mais applique au signal DE LA BROCHE, c'est-a-dire APRES
+// l'inversion du Dead-Band (DBCTL.POLSEL = DB_ACTV_LO, cf. pwm.c). Le MEP
+// est donc insere EN AVAL du sous-module Dead-Band -- fait etabli par la
+// mesure, pas par la documentation.
+//
+// L'inversion echangeant les deux fronts, celui de CMPA est le MONTANT a la
+// broche : c'est HR_REP qu'il faut.
+//
+// VALIDATION EN TROIS POINTS avec HR_REP, meme montage :
+//
+//   fraction 0    -> 49,985 %    (reference)
+//   fraction 128  -> 49,82 %     deplacement -0,165  (attendu -0,166)
+//   fraction 255  -> 49,68 %     deplacement -0,305  (attendu -0,332)
+//
+// La moitie de la fraction donne la moitie du deplacement : la conversion
+// est LINEAIRE et MONOTONE. C'est la seule propriete dont la regulation
+// depende reellement -- une commande non monotone ne converge pas.
+//
+// Un pas de MEP vaut donc 0,0013 point de rapport cyclique. Sur l'etage 2,
+// le quantum tombe de 8,3 V a 0,072 V.
+//
+// A REVERIFIER si DBCTL.POLSEL change un jour : les deux reglages sont lies.
+#define PWM_HRPWM_EDGMODE    HR_REP
 
 // Banc uniquement : expose g_hr_test_coarse et g_hr_test_frac, ecrits
 // depuis le debogueur, et court-circuite le rapport cyclique de l'etage 1.
 // DOIT rester a 0 en fonctionnement -- la regulation est alors ignoree sur
 // cet etage.
-#define PWM_HRPWM_EDGE_TEST  1
+#define PWM_HRPWM_EDGE_TEST  0
 
 // Le MEP ne fonctionne pas si l'impulsion est trop courte ou trop proche
 // de la periode : le TRM impose une marge de quelques cycles SYSCLK de

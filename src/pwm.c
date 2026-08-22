@@ -474,6 +474,52 @@ void pwm_set_duty_q8(stage_id_t stage, uint32_t duty_q8)
 
 // ---- Calibration MEP -------------------------------------------------
 
+// Un pas de calibration, et la recopie de son resultat dans le materiel.
+//
+// DEUX PIEGES, tous deux constates au banc le 23/08/2026, et tous deux
+// silencieux -- rien ne signale l'erreur, seul le front ne bouge pas.
+//
+// 1. EALLOW. HRMSTEP est un registre protege. Sans EALLOW, toute ecriture
+//    est rejetee sans le moindre retour. C'est ce qu'explique le "EALLOW;"
+//    isole et jamais referme de l'exemple TI Example_2802xHRPWM_Duty_SFO_V6.
+//
+// 2. LA RECOPIE N'EST PAS FAITE PAR LA BIBLIOTHEQUE. Son en-tete affirme
+//    pourtant que SFO() "updates HRMSTEP register with MEP_ScaleFactor
+//    value". Avec SFO_TI_Build_V6.lib sur f2802x, c'est faux : mesure au
+//    banc, MEP_ScaleFactor = 116 en RAM et HRMSTEP = 0 dans le peripherique,
+//    EALLOW ouvert. On fait donc la recopie explicitement.
+//
+// Pourquoi ca compte : avec AUTOCONV, le materiel obtient le nombre de pas
+// MEP en multipliant la fraction de CMPAHR par HRMSTEP. A zero, le produit
+// est nul. Tout parait juste -- calibration reussie, HRCNFG correct, CMPAHR
+// renseigne -- et le rapport cyclique ne bouge pas d'un millieme.
+//
+// HRMSTEP n'existe que dans l'espace de l'ePWM1, mais il vaut pour tous les
+// canaux : une seule ecriture suffit, quel que soit l'etage concerne.
+static int sfo_step(void)
+{
+    int status;
+
+    EALLOW;
+    status = SFO();
+    EDIS;
+
+    // EALLOW REARME ICI, ET PAS SEULEMENT AVANT SFO(). La bibliotheque
+    // referme la protection avant de rendre la main : un EALLOW pose en
+    // amont de l'appel ne couvre plus l'ecriture qui le suit, et celle-ci
+    // est alors rejetee en silence. Constate au banc -- HRMSTEP restait
+    // obstinement a 0 alors que la meme ecriture faite depuis le debogueur,
+    // qui ignore la protection, passait du premier coup.
+    EALLOW;
+    if ((MEP_ScaleFactor > 0) && (MEP_ScaleFactor <= 255))
+    {
+        EPwm1Regs.HRMSTEP = (uint16_t)MEP_ScaleFactor;
+    }
+    EDIS;
+
+    return status;
+}
+
 bool pwm_hrpwm_init(void)
 {
     // Borne explicite : une calibration qui n'aboutit pas ne doit pas figer
@@ -486,7 +532,7 @@ bool pwm_hrpwm_init(void)
 
     for (attempts = 0U; attempts < 1000U; attempts++)
     {
-        status = SFO();
+        status = sfo_step();
         if (status == SFO_COMPLETE)
         {
             s_hrpwm_ok = true;
@@ -503,13 +549,30 @@ bool pwm_hrpwm_init(void)
 
 bool pwm_hrpwm_service(void)
 {
-    if (SFO() == SFO_ERROR)
+    int status = sfo_step();
+
+    if (status == SFO_ERROR)
     {
         // La finesse disparait, la carte continue. Ne JAMAIS couper la
         // puissance pour ca : une calibration ratee n'est pas un defaut de
         // puissance, et la commande entiere reste parfaitement valide.
         s_hrpwm_ok = false;
         return false;
+    }
+
+    // ARMEMENT DU DRAPEAU ICI AUSSI, ET PAS SEULEMENT DANS pwm_hrpwm_init().
+    //
+    // La premiere version ne le levait qu'a l'initialisation. Or celle-ci est
+    // bornee a 1000 appels pour ne pas figer la carte au demarrage, et la
+    // calibration ne tient pas toujours dans ce budget : le drapeau restait
+    // alors faux DEFINITIVEMENT, meme une fois la calibration terminee en
+    // tache de fond. Constate au banc le 23/08/2026 -- MEP_ScaleFactor valait
+    // 117, donc une calibration parfaitement valide, et CMPAHR restait a zero.
+    //
+    // Le symptome est trompeur : tout a l'air correct sauf le resultat.
+    if (status == SFO_COMPLETE)
+    {
+        s_hrpwm_ok = true;
     }
     return true;
 }
