@@ -824,6 +824,45 @@
     SAFETY_DAC_CODE_FROM_V(MEAS_I2_OFFSET_V                               \
                            + SAFETY_ISHUNT_THRESHOLD_A * MEAS_I2_GAIN_V_PER_A)
 
+// ---- Fenetre d'aveuglement du comparateur (blanking) ----------------
+//
+// ETAGE 1 UNIQUEMENT, et ce n'est pas un choix arbitraire : la fenetre ne
+// peut etre ancree que sur CTR = 0 ou CTR = PRD (PULSESEL n'offre rien
+// d'autre). Depuis l'inversion de l'Action Qualifier, le BLOCAGE de
+// l'etage 1 -- le front qui rayonne -- tombe exactement sur CTR = 0. La
+// fenetre le couvre donc avec un decalage CONSTANT. L'etage 2, reste en
+// convention d'origine, a son blocage sur CMPA, mobile : il exigerait de
+// piloter DCFOFFSET depuis l'ISR a chaque pas. C'est precisement ce que
+// l'inversion evite, et la raison pour laquelle elle precedait le blanking.
+//
+// LE PRIX, A NE PAS MINIMISER. Pendant la fenetre la protection de
+// surintensite de l'etage 1 est AVEUGLE, et c'est l'instant exact ou un
+// court-circuit franc se manifesterait. Cet aveuglement s'EMPILE sur
+// SAFETY_COMP_QUALSEL, qui exige deja ~0,5 us de depassement continu. Ce
+// n'est pas un reglage de confort, c'est un compromis de securite assume
+// pour depasser 430 V.
+//
+// DIMENSIONNEMENT. TBCLK = 60 MHz, donc 16,67 ns par count. La pointe
+// parasite relevee au scope dure ~150 ns. 30 counts = 500 ns couvrent la
+// pointe et sa queue sans plus. A CONFIRMER AU SCOPE : elargir seulement
+// si la coupure persiste, jamais "par precaution".
+//
+// DCFOFFSET = 0 : la fenetre demarre a l'instant meme du blocage. La
+// sonnerie SUIT le front, il n'y a rien a couvrir avant.
+// REMIS A 0 LE 23/08/2026. Essaye a 440 V : sans effet, et on sait
+// maintenant pourquoi. L'evenement qui declenche n'est PAS une pointe de
+// commutation mais une salve d'emballement du courant de 60 a 130 us --
+// la fenetre en couvre 0,5. On aveuglait la protection pendant un
+// deux-centieme de la perturbation.
+//
+// A NE REACTIVER QUE si une pointe de commutation est un jour identifiee
+// au scope comme franchissant le seuil. Ce n'est pas le cas aujourd'hui.
+#define SAFETY_BLANK_STAGE1          0
+#define SAFETY_BLANK_OFFSET_COUNTS   0U
+#define SAFETY_BLANK_WINDOW_COUNTS  30U
+// Le garde-fou de coherence avec PWM_AQ_TAIL_STAGE1 est plus bas dans ce
+// fichier : ce symbole n'est pas encore defini ici.
+
 // ---- Protection thermique (logicielle, PROMPT §6 etape 4) -----------
 // Contrairement a la surintensite, la thermique est lente : le logiciel
 // suffit, aucun chemin materiel n'est requis.
@@ -832,6 +871,59 @@
 // L'hysteresis evite que l'etat oscille autour du point de bascule.
 #define SAFETY_OVERTEMP_C        80.0f
 #define SAFETY_OVERTEMP_HYST_C   10.0f
+
+// ---- ANTI-REBOND DES VOIES NTC (23/08/2026) -------------------------
+// Les voies T1/T2 ne sont PAS tamponnees (voir adc.h) : elles attaquent
+// l'entree de l'ADC directement depuis le point milieu du pont, sans
+// suiveur ni filtre actif. Un SEUL echantillon aberrant suffisait a
+// verrouiller la carte -- defaut code 5 constate le 22/08 avec une
+// temperature reelle stabilisee a 44 degres pour un seuil a 80, puis de
+// nouveau le 23/08 en montant vers 410 V, T2 relevee a 40 degres.
+//
+// Ce n'est pas thermique et ca ne peut pas l'etre : aucune NTC 0805 sur un
+// pont 10k/10k ne franchit 40 degres entre deux echantillons. C'est le
+// bruit de commutation, qui croit avec la tension de sortie -- d'ou
+// l'apparition du defaut a la montee en tension et pas avant.
+//
+// Meme principe que CTRL_VIN_UV_COUNTS : N mesures CONSECUTIVES au-dessus
+// du seuil avant de verrouiller. La thermique se compte en secondes, donc
+// la temporisation est GRATUITE -- contrairement a une surintensite, rien
+// ne se degrade pendant 50 ms.
+//
+// DECIMATION, ET POURQUOI ELLE EST OBLIGATOIRE. La boucle principale est
+// libre, sans cadencement : elle tourne beaucoup plus vite que les 15 us
+// d'une sequence ADC. Compter des PASSAGES DE BOUCLE compterait donc N fois
+// le MEME echantillon latche, et l'anti-rebond ne filtrerait strictement
+// RIEN tout en ayant l'air correct. On compte des sequences ADC.
+//
+// 667 sequences a 66,7 kHz font 10 ms ; 5 mesures espacees de 10 ms
+// couvrent 50 ms, soit plusieurs milliers de periodes de decoupage a des
+// phases non correlees. Une pointe de commutation n'y survit pas, un vrai
+// echauffement si.
+//
+// NE TOUCHE PAS AU VERROUILLAGE. Ce reglage ne fait que retarder la mise a
+// vrai de s_overtemp_tX. control_trip() latche toujours par-dessus, donc
+// l'hysteresis de relachement reste inoperante comme avant -- c'est
+// l'incoherence signalee dans hardware.md §7, dont la correction n'a PAS
+// ete autorisee et n'est pas faite ici.
+// PORTE A 100 LE 23/08/2026, SOIT 1 SECONDE. Les 5 mesures (50 ms) ont
+// suffi jusqu'a 430 V et le defaut est reapparu a 440 V : effet de SEUIL,
+// pas de degre. C'est la signature d'une rectification dans les diodes de
+// protection de l'entree ADC -- sous le seuil de conduction le RC filtre,
+// au-dessus il se fabrique du CONTINU, que rien ne filtre.
+//
+// 1 s reste gratuit : la fiche TDK donne tau_c = 10 s pour un 0805 sur
+// PCB (p.5), le capteur est donc lui-meme un passe-bas dix fois plus lent
+// que cette temporisation. On ne masque aucune dynamique thermique reelle.
+//
+// SERT AUSSI DE DISCRIMINATEUR. Si le code 5 disparait a 440 V, la
+// perturbation etait seulement plus longue que 50 ms. S'il persiste, c'est
+// bien du continu et le correctif est MATERIEL : 100 nF au POINT MILIEU du
+// pont, au plus pres de la thermistance -- pas en aval du 10 k serie, ou
+// se trouvent deja C8 et C24, qui filtrent ce qui arrive a l'ADC mais ne
+// protegent pas le noeud ou le couplage se produit.
+#define SAFETY_OVERTEMP_DECIM_SEQ  667U
+#define SAFETY_OVERTEMP_COUNTS     100U
 
 // ---- Timeout de la liaison ESP32 (PROMPT §6 etape 7) ----------------
 // Sans trame $C valide au-dela de ce delai, la liaison est declaree
@@ -893,7 +985,76 @@
 //     conduction n'en dure que 128 a ce rapport cyclique. Le groupe ne
 //     rentre pas dans la fenetre propre : vouloir l'y centrer n'avait pas
 //     de solution.
+// +30 COUNTS AJOUTES LE 23/08/2026, PAR LA MESURE.
+//
+// Balayage automatique a 430 V (ADC_TRIG_SWEEP), 7 pas de 10 counts,
+// enveloppe d'oscillation relevee au scope en mode Scan :
+//
+//   -30  calme     nominal  BRUYANT     +20  BRUYANT
+//   -20  calme     +10      calme       +30  CALME (30 s confirmees)
+//   -10  calme
+//
+// L'ENVELOPPE DEPEND DONC BIEN DE L'INSTANT D'ECHANTILLONNAGE : le
+// bouclage decrit dans pwm.c (bruit sur V1 -> integrateur -> duty -> le
+// front bouge -> le bruit change) est actif. C'est ce qui a permis de NE
+// PAS depenser de marge de gain pour stabiliser la boucle.
+//
+// ATTENTION, LA REPONSE N'EST PAS MONOTONE. Une explication par le seul
+// debordement de la sequence ADC sur le front d'extinction predirait une
+// amelioration monotone ; ce n'est pas ce qu'on mesure. Le mecanisme reel
+// n'est PAS etabli, et les deux zones bruyantes espacees de 20 counts
+// (333 ns) ne correspondent ni aux 550 ns entre voies ADC, ni a la periode
+// de l'etage 2. NE PAS extrapoler cette valeur a un autre point de
+// fonctionnement sans refaire le balayage.
+//
+// >>> +30 ESSAYE PUIS RETIRE LE MEME JOUR. <<<
+// Le balayage donnait +30 comme point calme, mais l'essai de bout en bout
+// l'a CONTREDIT : 440 V tenait 2 min avant, 430 V n'a tenu que 10 s avec.
+// L'enveloppe observee pendant 30 s de balayage n'a donc pas predit le
+// comportement en tenue longue.
+//
+// LECON. Le balayage mesure une AMPLITUDE D'ENVELOPPE sur quelques
+// dizaines de secondes ; la grandeur qui compte est le TEMPS AVANT
+// COUPURE, qui suit une loi de probabilite a queue longue. Les deux ne
+// sont pas le meme critere, et le premier ne substitue pas au second.
+// Toute reprise du balayage doit se conclure par un essai de tenue.
 #define ADC_TRIG_LEAD_COUNTS   (ADC_ACQPS_FAST + 1)
+
+// ---- BALAYAGE AUTOMATIQUE DE L'INSTANT D'ECHANTILLONNAGE ------------
+// BANC UNIQUEMENT. DOIT rester a 0 en fonctionnement normal.
+//
+// POURQUOI IL EXISTE. Le bouclage d'auto-entretien decrit dans pwm.c --
+// bruit de commutation sur V1 -> l'integrateur corrige -> le duty bouge ->
+// le front se deplace -> le bruit change -- se teste en deplacant l'instant
+// d'echantillonnage et en regardant si l'enveloppe d'oscillation change
+// d'amplitude. Cela devait se faire au debogueur sur g_adc_trig_lead.
+//
+// IMPOSSIBLE EN PRATIQUE : la session JTAG decroche des que la carte
+// commute (point ouvert connu), et la sonde XDS100v3 refuse le test de
+// connexion en dessous de 1 MHz de TCLK. Le firmware balaie donc lui-meme,
+// et le SCOPE SEUL suffit a lire le resultat.
+//
+// PROTOCOLE. Le balayage demarre a la demande de marche et avance d'un pas
+// toutes les ADC_TRIG_SWEEP_DWELL_TICKS (base 10 ms). Il part de
+// -(STEPS/2) pas et monte, puis SE FIGE a la derniere valeur -- il ne
+// reboucle pas, pour qu'un releve tardif reste interpretable. Il suffit
+// donc de compter les intervalles depuis RUN pour savoir ou on est.
+//
+// 7 pas de 10 counts (167 ns) toutes les 10 s : 70 s de balayage, couvrant
+// -30 a +30 counts autour de la valeur nominale. Tient largement dans les
+// 2 a 3 minutes que la carte soutient a 430 V.
+//
+// Les ecretages de pwm_apply_adc_trigger() bornent CMPB des deux cotes :
+// le balayage ne peut pas sortir de la plage utile ni eteindre la sequence
+// ADC. Si un reglage fait franchement osciller, ca coupe -- et c'est en soi
+// le resultat cherche.
+// Remis a 0 le 23/08/2026, essai fait : le resultat est fige dans
+// ADC_TRIG_LEAD_COUNTS ci-dessus. Repasser a 1 pour rebalayer a un autre
+// point de fonctionnement -- la valeur retenue n'y est pas transposable.
+#define ADC_TRIG_SWEEP            0
+#define ADC_TRIG_SWEEP_STEPS      7
+#define ADC_TRIG_SWEEP_STEP       10
+#define ADC_TRIG_SWEEP_DWELL_TICKS 1000U  // 10 s a 10 ms
 
 // INSTRUMENTATION TEMPORAIRE -- voir l'en-tete d'adc.c pour le detail et
 // pour l'avertissement de securite. A 1, la DUREE DE L'ISR ADC est marquee
@@ -954,16 +1115,29 @@
 // et le rejet est signale en telemetrie. On ne sature pas silencieusement,
 // sinon une erreur de commande passerait inapercue.
 #define CTRL_V1_SET_MIN_V       15.0f
-// 52 et non 50, alors que le POINT DE FONCTIONNEMENT retenu est 50 V fixe :
+// 77 et non 75, alors que le POINT DE FONCTIONNEMENT retenu est 75 V fixe :
 // se poser pile sur une borne de validation en virgule flottante est
-// fragile. Une conversion texte->flottant cote ESP32 rendant 50,000001
+// fragile. Une conversion texte->flottant cote ESP32 rendant 75,000001
 // ferait refuser la consigne a chaque trame, REJ monterait, et V1 resterait
 // silencieusement a sa valeur d'init (15 V). 2 V de jeu suppriment le cas.
 //
 // Sans effet sur la marge reelle : le plafond est un garde-fou, pas la
-// consigne. L'ESP32 envoie 50,0 fixe, donc 5 V subsistent jusqu'au seuil de
-// survoltage CTRL_V1_OV_TRIP_V (55 V).
-#define CTRL_V1_SET_MAX_V       52.0f
+// consigne. L'ESP32 envoie 75,0 fixe, donc 7 V subsistent jusqu'au seuil de
+// survoltage CTRL_V1_OV_TRIP_V (82 V).
+//
+// PASSAGE DE 50 A 75 V, 23/08/2026. Motif : l'etage 2 y gagne sur trois
+// axes -- D tombe de 0,90 a 0,84, son courant d'entree baisse de 1,6x a
+// puissance egale (donc moins de courant commute, donc moins de pointe
+// L.di/dt sur les shunts), et l'ondulation dans C6 baisse de 0,61 a 0,54 A.
+// L'ETAGE 1 N'Y GAGNE RIEN : I1 est fixe par VIN et la puissance d'entree,
+// pas par V1. Son rapport cyclique monte au contraire de 0,60 a 0,73 a
+// VIN = 20 V, donc son ondulation croit d'environ 25 %.
+//
+// LIMITE HAUTE, NE PAS DEPASSER SANS CHANGER C6. Le condensateur de sortie
+// de l'etage 1 (UCM2A221M, refs C6/C7) est un chimique 100 V. A 75 V on est
+// a 75 % du calibre, et le seuil de survoltage a 82 V y ajoute un transitoire
+// a 82 %. C'est C6 qui fixe ce plafond, pas la chaine de mesure.
+#define CTRL_V1_SET_MAX_V       77.0f
 #define CTRL_VOUT_SET_MIN_V    200.0f
 #define CTRL_VOUT_SET_MAX_V    500.0f
 
@@ -981,9 +1155,17 @@
 
 // ---- Seuils de coupure en survoltage --------------------------------
 // Verifies dans l'ISR ADC par simple comparaison sur la valeur brute.
-// Restent sous les pleines echelles mesurees (103 V et 600 V), donc la
-// mesure ne sature jamais avant que la protection n'agisse.
-#define CTRL_V1_OV_TRIP_V        55.0f
+// Restent sous les pleines echelles mesurees, donc la mesure ne sature
+// jamais avant que la protection n'agisse.
+//
+// ATTENTION, LA PLEINE ECHELLE V1 VAUT 96,6 V ET NON 103. Les 103 V
+// dataient du gain V0.1 (30,82) et trainent encore dans hardware.md. Avec le
+// gain V0.2 mesure (MEAS_V1_GAIN_V_PER_V = 29,27), la conversion vaut
+// 4096 / (3,3 x 29,27) = 42,4 raw/V, soit 96,6 V de pleine echelle. Le seuil
+// a 82 V est donc a 85 % de l'echelle : l'invariant ci-dessus tient toujours,
+// avec moins de marge qu'annonce. Au-dela de 90 V il faudrait revoir le pont
+// diviseur avant de toucher a ce seuil.
+#define CTRL_V1_OV_TRIP_V        82.0f
 #define CTRL_VOUT_OV_TRIP_V     520.0f
 
 // ---- Sous-tension d'entree ------------------------------------------
@@ -1099,6 +1281,26 @@
 // consigne.
 #define CTRL_KP_SHIFT             0U   // Kp = 1  (prudent : calcul -> 3)
 
+// ---- DIVISION SUPPLEMENTAIRE DU TERME P (23/08/2026) ----------------
+// Kp EFFECTIF = 2^CTRL_KP_SHIFT / 2^CTRL_KP_DIV_SHIFT.
+//
+// POURQUOI CE SECOND SYMBOLE plutot que descendre CTRL_KP_SHIFT : c'est un
+// decalage a GAUCHE, 0 en est le minimum. Kp ne pouvait pas descendre sous
+// 1 sans ce complement.
+//
+// MOTIF. L'enveloppe du courant oscillait a 2,3 kHz avec une cadence de
+// regulation a 5,13 kHz, soit exactement f/2. Doubler la cadence (195 ->
+// 98 us) a fait SUIVRE l'oscillation a ~5 kHz au lieu de la supprimer : le
+// pole reste au voisinage de z = -1, donc le gain est encore trop eleve.
+// La cadence ayant deja ete doublee, c'est le gain qui doit baisser.
+//
+// LE PRIX, A CONNAITRE. Le terme P est le SEUL qui reponde a un delestage
+// -- l'integrateur a besoin de plusieurs pas pour batir sa correction. Le
+// diviser par deux divise par deux la reponse au delestage, et il ne reste
+// que 20 V de marge sous la coupure a 520 V, jamais testes en delestage
+// sur l'etage 2. A caracteriser avant toute montee a 500 V.
+#define CTRL_KP_DIV_SHIFT         1U   // Kp effectif = 0,5
+
 // ---- Resultat mesure avec Kp = 1, le 20/08/2026 ----------------------
 //
 // Meme delestage qu'au releve ci-dessus :
@@ -1127,7 +1329,16 @@
 // de 90 degres a toute frequence, augmenter son gain coute de l'amortis-
 // sement exactement autant que ca rapporte de rapidite. C'est le terme
 // proportionnel qui apporte les deux ensemble.
-#define CTRL_KI_SHIFT            12U   // Ki = 1/4096 par pas
+// PORTE DE 12 A 13 LE 23/08/2026, EN MEME TEMPS QUE CTRL_TICK_PERIOD_US.
+// Ce n'est PAS un rereglage du PID : la cadence ayant double, diviser Ki
+// par pas par deux conserve EXACTEMENT la meme constante de temps
+// integrale en secondes. La boucle est identique, seulement echantillonnee
+// deux fois plus vite. Les deux constantes sont indissociables -- toucher
+// l'une sans l'autre change le comportement.
+//
+// s_accum_max suit automatiquement : control.c le calcule en
+// duty_max << CTRL_KI_SHIFT.
+#define CTRL_KI_SHIFT            13U   // Ki = 1/8192 par pas
 
 // ---- Terme derive : DESACTIVE ----------------------------------------
 //
@@ -1192,15 +1403,52 @@
 //
 // La regulation a quitte l'ISR ADC : une sequence sur treize, celle-ci
 // depassait 9 us et debordait sur la conversion suivante. Voir control.c.
-#define CTRL_TICK_PERIOD_US      195UL
+// ---- DIVISE PAR DEUX LE 23/08/2026 ----------------------------------
+// MESURE, pas hypothese : l'enveloppe du courant d'entree oscille en
+// permanence a ~2,3 kHz au scope, contre 5,128/2 = 2,56 kHz attendus.
+// C'est une OSCILLATION SOUS-HARMONIQUE a f_echantillonnage/2, signature
+// d'un pole discret passe au voisinage de z = -1 : la boucle a trop de
+// gain POUR SA CADENCE. Ce n'est pas un reglage de PID a retoucher, c'est
+// la cadence qui est trop lente pour le plant.
+//
+// Doubler la cadence divise par deux le gain de boucle PAR ECHANTILLON --
+// le plant a moitie moins de temps pour bouger entre deux corrections --
+// et eloigne donc le pole de z = -1.
+//
+// SECOND EFFET, tout aussi important : l'excursion en BOUCLE OUVERTE est
+// divisee par deux. Les salves d'emballement relevees au scope duraient
+// 130 us et tenaient donc ENTIEREMENT dans un intervalle de 195 us : le
+// regulateur ne les voyait qu'une fois terminees.
+//
+// LE PLANT S'EST DURCI EN COURS DE ROUTE. Le passage de V1 a 75 V a monte
+// D de 0,60 a 0,733, donc baisse le zero a droite du boost -- qui varie
+// en (1-D)^2 -- d'un facteur 2,2. On a rendu le convertisseur plus
+// difficile a commander en gardant la meme cadence de boucle.
+//
+// COMPENSATIONS OBLIGATOIRES, sans quoi ce changement EMPIRE tout :
+// CTRL_KI_SHIFT et les deux CTRL_RAMP_* sont exprimes PAR PAS. Doubler la
+// cadence sans les diviser par deux doublerait le gain integral par
+// seconde et la vitesse de rampe -- on remplacerait une instabilite par
+// une autre. Les trois constantes vont ensemble.
+//
+// BUDGET CPU : Timer 1 passe de 5,1 a 10,2 kHz. Il est en INT13, preempte
+// par l'ISR ADC (INT1), donc l'integrite des mesures n'est pas en jeu ;
+// seule la charge totale l'est. A MESURER avec ADC_TIMING_PROBE.
+#define CTRL_TICK_PERIOD_US       98UL
 
 // ---- Rampe de demarrage ----------------------------------------------
 // On rampe la CONSIGNE et non le duty : la boucle reste fermee pendant
 // toute la montee. Exprimee en volts par pas de regulation.
-// 0,01 V/pas a 5,1 kHz -> ~51 V/s sur l'etage 1, la montee de 10 a 50 V
+// 0,005 V/pas a 10,2 kHz -> ~51 V/s sur l'etage 1, la montee de 10 a 50 V
 // prend donc environ 0,8 s.
-#define CTRL_RAMP_V1_V_PER_STEP     0.01f
-#define CTRL_RAMP_VOUT_V_PER_STEP   0.10f
+//
+// DIVISES PAR DEUX LE 23/08/2026 avec CTRL_TICK_PERIOD_US : ces constantes
+// sont exprimees PAR PAS, donc les laisser telles quelles aurait double la
+// vitesse de rampe en volts par seconde. Les valeurs en V/s sont
+// INCHANGEES, c'est le but -- on ne modifie que la cadence de la boucle,
+// pas son comportement.
+#define CTRL_RAMP_V1_V_PER_STEP     0.005f
+#define CTRL_RAMP_VOUT_V_PER_STEP   0.05f
 
 // ---- Criteres de passage d'etat --------------------------------------
 // L'etage est declare etabli quand l'ecart reste sous tolerance pendant
@@ -1348,7 +1596,7 @@
 // N'attends aucune amelioration visible de son comportement : c'est une
 // repetition du mecanisme, pas un correctif.
 // LAISSES A 0 LE 22/08/2026 AU SOIR. Le code HRPWM est en place et compile,
-// mais PWM_HRPWM_EDGMODE n'a pas ete verifie au scope : tant qu'on ne sait
+// mais l'EDGMODE n'avait pas ete verifie au scope : tant qu'on ne sait
 // pas quel front le MEP deplace, la partie fractionnaire peut agir en sens
 // inverse de la partie entiere. A 0 sur les deux etages, aucune fraction
 // n'est ecrite dans CMPAHR et la carte se comporte EXACTEMENT comme avant.
@@ -1435,7 +1683,35 @@
 // le quantum tombe de 8,3 V a 0,072 V.
 //
 // A REVERIFIER si DBCTL.POLSEL change un jour : les deux reglages sont lies.
-#define PWM_HRPWM_EDGMODE    HR_REP
+//
+// ---- SCINDE PAR ETAGE LE 23/08/2026 ---------------------------------
+// Tout le raisonnement ci-dessus suppose la convention AQ d'origine
+// (conduction 0 -> CMPA). L'etage 1 est passe a la convention inverse
+// (conduction CMPA -> PRD, voir PWM_AQ_TAIL_STAGE1 plus bas), ce qui
+// echange une nouvelle fois les fronts : a la broche, CMPA produit
+// desormais le front DESCENDANT sur cet etage, donc HR_FEP.
+//
+// Deux inversions successives, et elles ne se compensent PAS -- le
+// Dead-Band inverse le NIVEAU, l'Action Qualifier echange QUEL front est
+// commande par CMPA. L'etage 2, reste en convention d'origine, garde
+// HR_REP.
+//
+// LES DEUX VALEURS SONT A REVERIFIER AU BANC avec le protocole ci-dessus
+// (duty fige, mesure par PosDuty, trois points pour la monotonie). Elles
+// ne se deduisent pas : la position du MEP dans la chaine a ete etablie
+// par la mesure, pas par la documentation.
+#define PWM_HRPWM_EDGMODE_STAGE1   HR_FEP
+#define PWM_HRPWM_EDGMODE_STAGE2   HR_REP
+
+// GARDE-FOU. L'ancien symbole unique ne doit plus exister : une
+// configuration perimee qui le definirait encore compilerait en silence
+// avec un EDGMODE identique sur les deux etages, dont un faux. C'est
+// exactement la classe de panne muette qui a coute la campagne du 23/08
+// (SFO qui ne recopie pas MEP_ScaleFactor, s_hrpwm_ok jamais leve) : rien
+// ne signale l'erreur, seul le front ne bouge pas.
+#ifdef PWM_HRPWM_EDGMODE
+#error "PWM_HRPWM_EDGMODE est scinde par etage : utiliser PWM_HRPWM_EDGMODE_STAGE1 / _STAGE2."
+#endif
 
 // Banc uniquement : expose g_hr_test_coarse et g_hr_test_frac, ecrits
 // depuis le debogueur, et court-circuite le rapport cyclique de l'etage 1.
@@ -1451,6 +1727,69 @@
 
 #if (PWM_DUTY_FRAC_BITS != 8U)
 #error "CMPAHR attend une fraction en Q16 : la conversion Q8 -> Q16 de pwm.c suppose 8 bits."
+#endif
+
+// =====================================================================
+// Convention de l'Action Qualifier -- QUEL FRONT EST MOBILE
+// =====================================================================
+//
+// CONVENTION D'ORIGINE (valeur 0) : ZRO = AQ_SET, CAU = AQ_CLEAR.
+// La conduction occupe 0 -> CMPA. Le MOSFET s'amorce au passage a zero
+// (FIXE) et se bloque sur CMPA (MOBILE).
+//
+// CONVENTION INVERSE (valeur 1) : ZRO = AQ_CLEAR, CAU = AQ_SET.
+// La conduction occupe CMPA -> PRD. Le MOSFET s'amorce sur CMPA (MOBILE)
+// et se bloque au passage a zero (FIXE).
+//
+// POURQUOI. Le front qui rayonne est celui du BLOCAGE : c'est lui qui
+// interrompt le courant d'inductance. En convention d'origine c'est le
+// front mobile, donc l'instant du parasite se deplace avec le rapport
+// cyclique -- aucune fenetre de blanking a decalage constant ne peut le
+// suivre, et le dephasage des deux etages n'est separable a aucun point
+// de fonctionnement. En convention inverse le blocage est ancre au
+// passage a zero, et l'amorcage -- qui ETABLIT le courant au lieu de
+// l'interrompre -- devient le front mobile. Il rayonne beaucoup moins.
+//
+// ETAT : etage 1 bascule le 23/08/2026, etage 2 laisse en convention
+// d'origine comme temoin de comparaison sur la meme carte.
+#define PWM_AQ_TAIL_STAGE1   1
+#define PWM_AQ_TAIL_STAGE2   0
+
+// ---- LE RENVERSEMENT DU CODAGE DE L'ETAT DE REPOS -------------------
+//
+// EN CONVENTION INVERSE, CMPA = 0 SIGNIFIE CONDUCTION PENDANT TOUTE LA
+// PERIODE. L'etat de repos et l'etat de pleine conduction ECHANGENT leur
+// codage. Un zero ecrit "par prudence" produirait exactement l'inverse de
+// ce qu'il croit faire.
+//
+// PARADE STRUCTURELLE, a ne pas defaire : pwm_set_duty_q8() recoit
+// toujours un DUTY, jamais un CMPA, et fait elle-meme la soustraction.
+// Tous les appelants -- stage_reset(), enable_power_path(), l'ecretage a
+// zero de regulate(), l'init de pwm.c -- gardent donc leur sens d'origine
+// et n'ont PAS ete modifies. duty = 0 ne cesse jamais de vouloir dire
+// repos, nulle part dans le code.
+//
+// L'inhibition reelle ne depend d'ailleurs pas du tout de CMPA : elle
+// passe par AQCSFRC (en amont du Dead-Band) et par TZ_FORCE_HI (en aval).
+// Les deux chemins de securite sont insensibles a cette convention.
+//
+// Valeur de CMPA correspondant au repos, pour les verifications au
+// debogueur : 300 sur l'etage 1 (TBPRD = 299). Si on y lit 0, le
+// renversement a ete manque quelque part.
+#define PWM_CMPA_AT_REST(prd)   ((uint16_t)((prd) + 1U))
+
+// GARDE-FOU DE COHERENCE. Place ici et non dans la section securite :
+// PWM_AQ_TAIL_STAGE1 n'y est pas encore defini, et un #if sur un symbole
+// inconnu le lirait comme 0 -- le garde-fou se declencherait a tort, ou
+// pire, un garde-fou ecrit dans l'autre sens ne se declencherait jamais.
+//
+// La fenetre de blanking ne peut etre ancree que sur CTR = 0 ou CTR = PRD.
+// Sans l'inversion de l'AQ, le blocage de l'etage 1 tombe sur CMPA, donc a
+// un instant MOBILE : la fenetre masquerait un moment quelconque du cycle
+// au lieu de la commutation, et le ferait EN SILENCE -- on aveuglerait la
+// protection sans rien gagner.
+#if SAFETY_BLANK_STAGE1 && !PWM_AQ_TAIL_STAGE1
+#error "Blanking etage 1 sans inversion AQ : la fenetre serait ancree sur CTR=0 alors que le blocage tombe sur CMPA, donc a un instant mobile."
 #endif
 
 // =====================================================================

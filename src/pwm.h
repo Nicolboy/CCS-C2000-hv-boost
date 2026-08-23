@@ -42,6 +42,12 @@ void pwm_set_duty_counts(stage_id_t stage, uint16_t counts);
 // Appelable depuis l'ISR : deux decalages, un masque, une ecriture 32 bits.
 void pwm_set_duty_q8(stage_id_t stage, uint32_t duty_q8);
 
+// Avance du declenchement de la sequence ADC, en counts de TBCLK, SIGNEE
+// (negatif = retarde). Initialisee a ADC_TRIG_LEAD_COUNTS. Ecrivable au
+// debogueur, et balayee automatiquement quand ADC_TRIG_SWEEP est actif.
+// Voir pwm.c pour ce qu'elle sert a diagnostiquer.
+extern volatile int16_t g_adc_trig_lead;
+
 // ---- Calibration MEP (SFO) -------------------------------------------
 // Le pas du Micro Edge Positioner depend de la temperature et de la
 // tension d'alimentation. La bibliotheque SFO de TI mesure ce pas et

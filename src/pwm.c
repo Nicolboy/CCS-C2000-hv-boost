@@ -57,7 +57,7 @@ volatile struct EPWM_REGS *ePWM[PWM_CH] = {
 // A ecrire depuis le debogueur. g_hr_test_coarse fige la partie entiere de
 // CMPA sur l'etage 1 ; g_hr_test_frac balaie la SEULE partie fractionnaire,
 // de 0 a 255. Le front qui se deplace au scope designe celui que le MEP
-// commande, donc la bonne valeur de PWM_HRPWM_EDGMODE.
+// commande, donc la bonne valeur de PWM_HRPWM_EDGMODE_STAGE1.
 //
 // volatile et NON static : le symbole doit survivre a l'optimisation et
 // rester accessible au debogueur.
@@ -80,6 +80,32 @@ static bool stage_has_hrpwm(stage_id_t stage)
 #endif
 }
 
+// Convention de l'Action Qualifier de cet etage. Vrai = conduction en FIN
+// de periode (CMPA -> PRD), donc blocage ancre au passage a zero. Voir
+// calib.h, section "Convention de l'Action Qualifier".
+//
+// Meme forme que stage_has_hrpwm() ci-dessus, et pour la meme raison : le
+// compilateur elimine la branche morte quand les deux etages sont d'accord,
+// ce qui evite un test dans pwm_set_duty_q8(), appelee depuis l'ISR.
+//
+// Ce predicat est TRANSITOIRE. Quand l'etage 2 basculera a son tour, les
+// deux defines passeront a 1 et il pourra disparaitre -- ce n'est pas un
+// interrupteur de retour arriere.
+static bool stage_has_aq_tail(stage_id_t stage)
+{
+#if PWM_AQ_TAIL_STAGE1 && PWM_AQ_TAIL_STAGE2
+    (void)stage;
+    return true;
+#elif PWM_AQ_TAIL_STAGE1
+    return (stage == STAGE_1);
+#elif PWM_AQ_TAIL_STAGE2
+    return (stage == STAGE_2);
+#else
+    (void)stage;
+    return false;
+#endif
+}
+
 static volatile struct EPWM_REGS *pwm_regs(stage_id_t stage)
 {
     return (stage == STAGE_1) ? &EPwm1Regs : &EPwm2Regs;
@@ -91,7 +117,15 @@ static uint16_t stage_index(stage_id_t stage)
 }
 
 // Place CMPB, qui declenche la sequence ADC, au MILIEU de la conduction du
-// MOSFET. La conduction va de CTR=0 a CMPA, le point vise est donc CMPA>>1.
+// MOSFET. L'expression du milieu DEPEND DE LA CONVENTION DE L'AQ :
+//
+//   convention d'origine : conduction 0 -> CMPA        milieu = CMPA/2
+//   convention inverse   : conduction CMPA -> PRD+1    milieu = (CMPA+PRD+1)/2
+//
+// Dans les deux cas la distance du point vise au front de blocage vaut la
+// moitie de la duree de conduction : la geometrie change, la marge non.
+// Tout ce qui est ecrit plus bas sur l'instant reellement echantillonne
+// reste donc valable a l'identique.
 //
 // ADC_TRIG_LEAD_COUNTS avance le declenchement de la fenetre d'acquisition,
 // l'ADC echantillonnant a sa FIN. I1 etant en tete de sequence, son instant
@@ -166,13 +200,64 @@ static uint16_t stage_index(stage_id_t stage)
 // n'echantillonne jamais. On ne destabilise pas la regulation pour ameliorer
 // un affichage. Si la valeur doit etre juste, c'est le gain qu'il faut
 // etalonner A CET INSTANT-LA, pas l'instant qu'il faut deplacer.
-static void pwm_apply_adc_trigger(volatile struct EPWM_REGS *p)
-{
-    uint16_t mid = (uint16_t)(p->CMPA.half.CMPA >> 1);
+// AVANCE DU DECLENCHEMENT, REGLABLE AU DEBOGUEUR.
+//
+// volatile et NON static, comme g_hr_test_coarse : le symbole doit survivre
+// a l'optimisation et rester accessible. Initialisee a la valeur calculee
+// de calib.h, donc le comportement au demarrage est inchange.
+//
+// A QUOI CA SERT. pwm.c documente plus haut un bouclage d'auto-entretien :
+// bruit de commutation sur V1 -> l'integrateur corrige -> le duty bouge ->
+// le front se deplace -> le bruit change. S'il est actif, l'enveloppe
+// d'oscillation doit changer d'amplitude quand on deplace l'instant
+// d'echantillonnage. C'est le seul moyen simple de le savoir, et il ne
+// coute aucune marge de securite -- contrairement a baisser un gain.
+//
+// SIGNEE : une valeur NEGATIVE retarde l'echantillon au lieu de l'avancer.
+// Les deux sens sont utiles, le point optimal n'est pas connu.
+//
+// Balayer par pas de ~10 counts (167 ns a 60 MHz) et relever l'amplitude
+// de l'enveloppe. Sans effet = le bouclage ne passe pas par la, et il
+// faudra bien depenser du gain.
+volatile int16_t g_adc_trig_lead = (int16_t)ADC_TRIG_LEAD_COUNTS;
 
-    p->CMPB = (mid > (uint16_t)ADC_TRIG_LEAD_COUNTS)
-                  ? (uint16_t)(mid - (uint16_t)ADC_TRIG_LEAD_COUNTS)
-                  : 1U;
+static void pwm_apply_adc_trigger(volatile struct EPWM_REGS *p, bool tail)
+{
+    uint16_t cmpa = p->CMPA.half.CMPA;
+    uint16_t prd = p->TBPRD;
+    uint16_t mid;
+    int32_t trig;
+
+    // Somme puis decalage : la somme vaut au plus 2*(TBPRD+1) = 1200, elle
+    // tient dans 16 bits. Aucune multiplication ni division, la regle
+    // d'appel depuis l'ISR est tenue.
+    mid = tail ? (uint16_t)((cmpa + prd + 1U) >> 1)
+               : (uint16_t)(cmpa >> 1);
+
+    // Calcul en 32 bits SIGNES : g_adc_trig_lead peut etre negatif, et une
+    // soustraction non signee y produirait un rebouclage silencieux vers
+    // 65000 -- exactement le genre de valeur qui ne declencherait jamais.
+    trig = (int32_t)mid - (int32_t)g_adc_trig_lead;
+
+    // Ecretage des DEUX cotes.
+    //
+    // En bas : CMPB = 0 est un instant valide mais colle au passage a zero.
+    //
+    // En haut, et c'est le cote qui compte : le milieu de conduction remonte
+    // vers la fin de periode quand le duty tombe (convention inverse), et
+    // CMPB > TBPRD ne se declencherait JAMAIS -- la sequence ADC s'arreterait
+    // en silence, sans qu'aucune protection ne le signale. Or les coupures
+    // V1 et VOUT vivent dans l'ISR ADC : les perdre serait grave.
+    if (trig < 1)
+    {
+        trig = 1;
+    }
+    else if (trig > (int32_t)prd)
+    {
+        trig = (int32_t)prd;
+    }
+
+    p->CMPB = (uint16_t)trig;
 }
 
 // Calibration MEP valide ? Tant qu'elle ne l'est pas, la partie
@@ -189,8 +274,9 @@ static void pwm_apply_duty(stage_id_t stage)
     float duty = s_stage[stage_index(stage)].duty;
     uint32_t period_q8 = ((uint32_t)(p->TBPRD + 1U)) << PWM_DUTY_FRAC_BITS;
 
-    // En up-count avec AQ_SET a zero et AQ_CLEAR sur CMPA, la sortie est
-    // haute pendant CMPA cycles : duty = CMPA / (TBPRD + 1).
+    // On passe un DUTY, pas un CMPA : la conversion vers CMPA, et donc la
+    // convention de l'Action Qualifier, appartiennent entierement a
+    // pwm_set_duty_q8(). Rien ici ne depend de la convention.
     pwm_set_duty_q8(stage, (uint32_t)(duty * (float)period_q8 + 0.5f));
 }
 
@@ -261,9 +347,26 @@ void pwm_init(void)
             p->CMPCTL.bit.SHDWBMODE = CC_SHADOW;
             p->CMPCTL.bit.LOADBMODE = CC_CTR_ZERO;
 
-            // Haut a zero, bas sur CMPA -> impulsion en debut de periode.
-            p->AQCTLA.bit.ZRO = AQ_SET;
-            p->AQCTLA.bit.CAU = AQ_CLEAR;
+            // Convention de l'Action Qualifier -- voir calib.h.
+            //
+            // Origine : haut a zero, bas sur CMPA. La sortie AQ est haute
+            // sur [0, CMPA), donc apres inversion du Dead-Band la broche
+            // est basse sur [0, CMPA) et le MOSFET conduit en DEBUT de
+            // periode. Le BLOCAGE tombe sur CMPA, donc il est MOBILE.
+            //
+            // Inverse : bas a zero, haut sur CMPA. Le MOSFET conduit sur
+            // [CMPA, PRD], l'AMORCAGE tombe sur CMPA (mobile) et le
+            // BLOCAGE au passage a zero, donc FIXE. C'est le but.
+            if (stage_has_aq_tail(s))
+            {
+                p->AQCTLA.bit.ZRO = AQ_CLEAR;
+                p->AQCTLA.bit.CAU = AQ_SET;
+            }
+            else
+            {
+                p->AQCTLA.bit.ZRO = AQ_SET;
+                p->AQCTLA.bit.CAU = AQ_CLEAR;
+            }
 
             // INVERSION DE POLARITE DE SORTIE (driver UCC27517 inverseur :
             // IN bas -> OUT haut -> MOSFET passant). On inverse via le
@@ -312,7 +415,13 @@ void pwm_init(void)
             p->HRCNFG.all = 0U;
             if (stage_has_hrpwm(s))
             {
-                p->HRCNFG.bit.EDGMODE = PWM_HRPWM_EDGMODE;
+                // EDGMODE depend de la convention AQ de l'etage : elle
+                // decide QUEL front de la broche est commande par CMPA.
+                // Les deux etages n'ont donc pas la meme valeur tant que
+                // l'etage 2 n'a pas bascule.
+                p->HRCNFG.bit.EDGMODE = (s == STAGE_1)
+                                            ? PWM_HRPWM_EDGMODE_STAGE1
+                                            : PWM_HRPWM_EDGMODE_STAGE2;
                 p->HRCNFG.bit.CTLMODE = HR_CMP;
                 p->HRCNFG.bit.HRLOAD = HR_CTR_ZERO;
                 p->HRCNFG.bit.AUTOCONV = 1;
@@ -396,6 +505,16 @@ float pwm_get_duty(stage_id_t stage)
     {
         return 0.0f;
     }
+
+    // Inverse exact de la conversion de pwm_set_duty_q8() : sans ce
+    // complement la telemetrie afficherait 1 - duty, et un etage au repos
+    // se lirait a pleine conduction. C'est un piege de LECTURE, pas de
+    // commande -- le materiel, lui, est correct dans les deux cas -- mais
+    // il suffit a faire conclure a une panne inexistante.
+    if (stage_has_aq_tail(stage))
+    {
+        return (float)(period - p->CMPA.half.CMPA) / (float)period;
+    }
     return (float)p->CMPA.half.CMPA / (float)period;
 }
 
@@ -435,6 +554,7 @@ void pwm_set_duty_q8(stage_id_t stage, uint32_t duty_q8)
     volatile struct EPWM_REGS *p = pwm_regs(stage);
     uint16_t prd = p->TBPRD;
     uint32_t max_q8 = ((uint32_t)(prd + 1U)) << PWM_DUTY_FRAC_BITS;
+    uint32_t cmpa_q8;
     uint16_t coarse;
     uint16_t frac_q16;
 
@@ -443,12 +563,45 @@ void pwm_set_duty_q8(stage_id_t stage, uint32_t duty_q8)
         duty_q8 = max_q8;
     }
 
-    coarse = (uint16_t)(duty_q8 >> PWM_DUTY_FRAC_BITS);
-    frac_q16 = (uint16_t)((duty_q8 & 0xFFUL) << 8);
+    // ---- LE SEUL ENDROIT OU LA CONVENTION AQ EXISTE ------------------
+    //
+    // Cette fonction recoit un DUTY -- une duree de conduction -- et jamais
+    // un CMPA. C'est ce qui rend la bascule sure : tous les appelants
+    // gardent leur sens d'origine, et "duty = 0" ne cesse jamais de
+    // vouloir dire REPOS, nulle part dans le code.
+    //
+    // En convention inverse la conduction occupe [CMPA, PRD+1], donc
+    // CMPA = periode - duty. Le renversement est reel et complet :
+    //
+    //     duty = 0        ->  CMPA = periode   (repos)
+    //     duty = periode  ->  CMPA = 0         (pleine conduction)
+    //
+    // NE JAMAIS ecrire CMPA directement ailleurs en croyant ecrire un duty.
+    //
+    // La soustraction se fait EN Q8, donc l'emprunt sur la partie
+    // fractionnaire est porte tout seul par l'arithmetique : il n'y a pas
+    // a complementer la fraction separement. C'est la raison de faire le
+    // calcul ici plutot qu'apres le decoupage coarse/frac.
+    //
+    // L'ecretage ci-dessus garantit duty_q8 <= max_q8, donc cmpa_q8 reste
+    // dans [0, max_q8] : aucun debordement possible sur un non signe.
+    cmpa_q8 = stage_has_aq_tail(stage) ? (max_q8 - duty_q8) : duty_q8;
+
+    coarse = (uint16_t)(cmpa_q8 >> PWM_DUTY_FRAC_BITS);
+    frac_q16 = (uint16_t)((cmpa_q8 & 0xFFUL) << 8);
 
 #if PWM_HRPWM_EDGE_TEST
     // Essai de front : la regulation est court-circuitee sur l'etage 1, seul
     // le debogueur decide. Voir calib.h.
+    //
+    // CE BLOC EST APRES LA CONVERSION, DELIBEREMENT : g_hr_test_coarse ecrit
+    // donc CMPA DIRECTEMENT, sans passer par la soustraction. C'est ce qu'il
+    // faut pour le protocole de banc, qui raisonne sur la position d'un front
+    // et non sur une duree de conduction.
+    //
+    // PIEGE DE LECTURE : au point de mesure du protocole (CMPA = 150 sur
+    // TBPRD = 299) le duty vaut 50 % dans LES DEUX conventions, donc rien ne
+    // distingue les deux interpretations. A toute autre valeur, si.
     if (stage == STAGE_1)
     {
         coarse = g_hr_test_coarse;
@@ -460,6 +613,12 @@ void pwm_set_duty_q8(stage_id_t stage, uint32_t duty_q8)
     // l'impulsion. Hors de cette plage on abandonne la partie fractionnaire
     // plutot que de la confier a un materiel qui ne la respectera pas : on
     // retombe alors sur la resolution entiere, sans discontinuite.
+    //
+    // Le test porte sur CMPA et reste donc juste dans les deux conventions,
+    // la contrainte etant materielle et propre au compare. Ce qui change est
+    // OU elle mord : en convention d'origine elle ecarte la fraction aux duty
+    // extremes, en convention inverse aux duty extremes OPPOSES -- pres de
+    // la pleine conduction au lieu du repos, et inversement.
     if (!s_hrpwm_ok
         || !stage_has_hrpwm(stage)
         || (coarse < PWM_HRPWM_GUARD_COUNTS)
@@ -469,7 +628,7 @@ void pwm_set_duty_q8(stage_id_t stage, uint32_t duty_q8)
     }
 
     p->CMPA.all = ((uint32_t)coarse << 16) | (uint32_t)frac_q16;
-    pwm_apply_adc_trigger(p);
+    pwm_apply_adc_trigger(p, stage_has_aq_tail(stage));
 }
 
 // ---- Calibration MEP -------------------------------------------------

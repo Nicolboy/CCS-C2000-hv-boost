@@ -70,6 +70,46 @@ void safety_init(void)
     EPwm1Regs.TZSEL.bit.OSHT6 = 1;
     EPwm1Regs.TBCTL.bit.FREE_SOFT = 0;
 
+#if SAFETY_BLANK_STAGE1
+    // ---- FENETRE D'AVEUGLEMENT, ETAGE 1 -----------------------------
+    //
+    // Chaine, deux prises distinctes sur le meme signal -- ce n'est pas une
+    // boucle, meme si les deux lignes se ressemblent :
+    //
+    //   COMP1OUT -> DCAH -> TZDCSEL.DCAEVT1 -> [filtre] -> DCAEVT1 -> TZSEL -> OST
+    //                                             ^            ^
+    //                                    DCFCTL.SRCSEL   DCACTL.EVT1SRCSEL
+    //
+    // SRCSEL dit au bloc filtre QUOI filtrer ; EVT1SRCSEL dit a DCAEVT1 de
+    // prendre la sortie FILTREE plutot que la brute. Sans la seconde ligne
+    // le filtre tournerait dans le vide et la Trip Zone continuerait de
+    // voir l'evenement non filtre -- panne muette : tout est configure,
+    // rien ne change.
+    //
+    // Verifie contre Example_2802xEPwmBlanking.c du C2000Ware (f2802x),
+    // qui note "For blanking we must use the filtered event".
+    EPwm1Regs.DCFCTL.bit.SRCSEL     = DC_SRC_DCAEVT1;
+    EPwm1Regs.DCACTL.bit.EVT1SRCSEL = DC_EVT_FLT;
+
+    // Ancrage sur CTR = 0, qui est l'instant du BLOCAGE depuis l'inversion
+    // de l'AQ. Le decalage peut donc rester constant : DCFOFFSET n'est PAS
+    // pilote depuis l'ISR, contrairement au contournement qu'il aurait fallu
+    // avec la convention d'origine.
+    EPwm1Regs.DCFCTL.bit.PULSESEL   = DC_PULSESEL_ZERO;
+    EPwm1Regs.DCFOFFSET             = SAFETY_BLANK_OFFSET_COUNTS;
+    EPwm1Regs.DCFWINDOW             = SAFETY_BLANK_WINDOW_COUNTS;
+    EPwm1Regs.DCFCTL.bit.BLANKE     = DC_BLANK_ENABLE;
+    EPwm1Regs.DCFCTL.bit.BLANKINV   = DC_BLANK_NOTINV;
+
+    // EVT1FRCSYNCSEL VOLONTAIREMENT LAISSE A SA VALEUR DE RESET. L'exemple
+    // TI bascule sur le chemin asynchrone ; on ne le suit PAS ici, parce
+    // que ce bit gouverne la latence de declenchement de la protection et
+    // que la notre est caracterisee a 30 ns dans la documentation du
+    // projet. Le changer serait modifier un temps de reponse de securite
+    // au passage d'un reglage de filtrage. A traiter separement, et a
+    // mesurer, si le besoin apparait.
+#endif
+
     EPwm2Regs.DCTRIPSEL.bit.DCAHCOMPSEL = DC_COMP2OUT;
     EPwm2Regs.TZDCSEL.bit.DCAEVT1 = TZ_DCAH_LOW;
     EPwm2Regs.TZSEL.bit.DCAEVT1 = 1;

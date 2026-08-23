@@ -14,15 +14,43 @@ reste **ouvert** — et il distingue les trois.
 | | |
 |---|---|
 | Branche | `bringup`, rien de poussé |
-| Dernier commit | `e17c4de` |
 | Firmware chargé | dualboost, HRPWM actif sur les deux étages |
-| Meilleur point atteint | **400 V sur 50 kΩ**, tenu |
-| Blocage actuel | `overI1` dès qu'on dépasse 400 V |
+| **Meilleur point atteint** | **500 V sur 50 kΩ, tenu 4 minutes** ✅ |
+| Blocage | **aucun** — l'objectif de conception est atteint |
+
+> **23/08/2026 au soir : l'emballement de courant est résolu.** Le `overI1`
+> qui bloquait la montée n'était PAS un parasite de commutation, contrairement
+> à ce que supposait la version précédente de ce document. C'était une
+> **instabilité de la boucle de régulation**. Voir §5, entièrement réécrit.
+
+Mesure de synthèse, l'AC RMS de la voie I1 au fil de la journée :
+
+| état | AC RMS |
+|---|---|
+| début de journée | 551 mV |
+| inductance SER2211 | 428 mV |
+| cadence de boucle 98 µs | 284 mV |
+| **Kp divisé par deux** | **89 mV** |
 
 **Défaut matériel connu** : une piste coupée a été trouvée le 23/08 entre
 la commande et l'étage 2. État de la réparation à vérifier avant toute
 conclusion — plusieurs heures ont été perdues à chercher dans le logiciel
 une panne qui était mécanique.
+
+## 1 bis. ⚠️ Deux calibres sont dépassés à 500 V
+
+À traiter avant tout fonctionnement prolongé. Ces deux points étaient
+listés comme « avant d'aller à 500 V » ; on y est allé.
+
+- **MSS1583 (L2) : « Operating voltage 400 V max »**, fiche Coilcraft p.1.
+  On est 25 % au-dessus. Deux en série partagent la tension aux bornes,
+  mais la fiche ne précise pas si le calibre vise l'enroulement ou
+  l'isolement au noyau. Question ouverte, devenue actuelle.
+- **IPD60R360P7 (MOSFET étage 2) : 600 V min contre une coupure à 520 V**,
+  soit 1,15×, avant tout dépassement au blocage. Le **NTD100N70GN1**
+  (700 V, et surtout **800 V transitoire sous 200 µs**, ce qui est
+  exactement la nature du pic de blocage d'un boost) reste le correctif.
+  C'est le point matériel le plus urgent du projet.
 
 ---
 
@@ -172,7 +200,100 @@ monotone ne converge pas.
 
 ---
 
-## 5. Le blocage actuel : `overI1` au-dessus de 400 V
+## 5. `overI1` — RÉSOLU le 23/08/2026, et pas pour la raison prévue
+
+### Ce que c'était réellement
+
+**Une instabilité de la boucle de régulation, pas un parasite de
+commutation.** La démonstration, en quatre mesures :
+
+1. **Au scope, l'événement n'est pas une pointe** : c'est une enveloppe qui
+   gonfle sur 60 à 130 µs — une douzaine de périodes de découpage — de
+   0,5 V à 3,5 V en sortie d'ampli de shunt, avec une croissance
+   **géométrique** de +17 % par période, puis un effondrement. Converti :
+   0,8 A → **6,0 A réels**, contre un seuil à 7,0 A. Les crêtes frôlaient
+   le seuil, d'où le caractère aléatoire du déclenchement.
+2. **Le blanking n'a rien changé.** Une fenêtre de 500 ns contre un
+   événement de 130 µs ne pouvait rien : on aveuglait la protection
+   pendant un deux-centième de la perturbation. Résultat négatif, mais
+   informatif — il a écarté définitivement l'hypothèse du parasite.
+3. **Changer l'inductance a ralenti sans guérir.** La SER2211 (Isat 4,40 A
+   contre 2,60) a fait passer la rampe de 60 à 130 µs, sans supprimer
+   l'emballement. Discriminateur décisif : **la saturation aggravait, elle
+   ne causait pas.**
+4. **L'enveloppe oscillait à 2,3 kHz** pour une cadence de régulation de
+   5,13 kHz, soit exactement **`f/2`** — signature d'une oscillation
+   **sous-harmonique**, c'est-à-dire d'un pôle discret au voisinage de
+   `z = −1`. Trop de gain pour la cadence.
+
+Le mécanisme d'entretien : la commande est figée entre deux pas de
+régulation, et l'inductance intègre librement tout déséquilibre
+volt-seconde pendant ce temps. Avec 195 µs de maintien, une rampe de
+130 µs tenait **entièrement dans un seul intervalle** — le régulateur ne la
+voyait qu'une fois terminée.
+
+Ce mécanisme était déjà décrit dans `calib.h` (« escalier géométrique,
++13 % par période, facteur 5 en 130 µs, la plupart avortent, certains
+atteignent le seuil du comparateur et coupent la carte »), mais attribué à
+la quantification, que HRPWM avait supprimée. **Les 195 µs, eux, étaient
+restés.**
+
+### Le correctif, en deux temps
+
+| changement | effet |
+|---|---|
+| `CTRL_TICK_PERIOD_US` 195 → **98 µs** | gain de boucle par échantillon ÷2, excursion en boucle ouverte ÷2 |
+| `CTRL_KI_SHIFT` 12 → **13**, rampes ÷2 | compensations obligatoires : ces constantes sont **par pas**, sans elles on doublait le gain intégral par seconde |
+| `CTRL_KP_DIV_SHIFT` = **1** (Kp = 0,5) | doubler la cadence avait fait **suivre** la sous-harmonique à ~5 kHz au lieu de la supprimer : le gain restait trop élevé |
+
+Après quoi : **500 V sur 50 kΩ, 4 minutes, AC RMS de 551 à 89 mV.**
+
+Il subsiste une modulation d'enveloppe à ~450 Hz. Ce n'est **pas** une
+sous-harmonique (`f/2` vaut maintenant 5,1 kHz) — c'est la bande passante
+de la boucle fermée. Point de fonctionnement sain.
+
+> ⚠️ **Le prix, à connaître.** Le terme P est le SEUL qui réponde à un
+> délestage ; l'intégrateur met plusieurs pas à bâtir sa correction. On
+> vient de diviser cette réponse par deux, et il ne reste que **20 V**
+> entre 500 V et la coupure à 520 V. **Le délestage à 500 V n'a jamais été
+> testé** et devient le risque principal. Partir de 300 V, scope armé en
+> single sur VOUT, mesurer le dépassement relatif avant de refaire à 500.
+
+### Ce qui a été essayé et retiré
+
+- **Blanking étage 1** (`SAFETY_BLANK_STAGE1`) — implémenté, essayé,
+  **désactivé**. Sans effet, et il coûtait 500 ns d'aveuglement de la
+  protection de surintensité par période. Le code reste en place, avec un
+  `#error` qui interdit de l'activer sans l'inversion AQ. À ne réactiver
+  que si une pointe de commutation est un jour identifiée au scope comme
+  franchissant le seuil.
+- **`ADC_TRIG_LEAD_COUNTS` + 30** — le balayage automatique désignait ce
+  point comme le plus calme, l'essai de tenue l'a **contredit** (440 V
+  tenait 2 min avant, 430 V n'a tenu que 10 s avec). **Retiré.**
+  **Leçon de méthode** : le balayage mesure une *amplitude d'enveloppe* sur
+  quelques dizaines de secondes ; la grandeur qui compte est le *temps
+  avant coupure*, qui suit une loi à queue longue. Ce ne sont pas le même
+  critère. Tout balayage doit se conclure par un essai de tenue.
+
+### L'outil, à réutiliser
+
+`ADC_TRIG_SWEEP` dans `calib.h` fait balayer `g_adc_trig_lead` par le
+firmware lui-même, 7 pas de 10 counts toutes les 10 s à partir de `RUN`,
+puis fige. **Il existe parce que le débogueur est inutilisable sous
+puissance** : la session JTAG décroche dès que la carte commute, et la
+sonde XDS100v3 **refuse le test de connexion en dessous de 1 MHz de
+TCLK** — la piste « descendre TCLK » du §7 est donc fermée. Le scope seul
+suffit à lire le résultat, en mode Scan.
+
+---
+
+### Ce qui suit est l'analyse d'AVANT la résolution — conservée pour mémoire
+
+Elle attribuait `overI1` à un parasite de commutation. **C'était faux**,
+mais l'inversion de l'Action Qualifier qu'elle a motivée a bien été faite
+sur l'étage 1 et est conservée : le front de coupure est désormais ancré au
+passage à zéro, ce qui rendra le blanking et le déphasage exploitables si
+le besoin réapparaît.
 
 ### Ce n'est pas du courant réel
 
@@ -360,13 +481,35 @@ agir**. Cette incohérence a coûté trois manipulations sur la campagne. Une
 modification a été proposée trois fois et **n'a pas été autorisée** : ne
 pas la faire sans accord explicite.
 
-**Voies NTC non tamponnées.** `adc.h` documente déjà `ADC_CH_T1` / `T2`
-comme « non tamponnée, lente ». Un seul échantillon aberrant verrouille la
-carte (défaut code 5 constaté le 22/08, alors que la température réelle
-s'est stabilisée à 44 °C pour un seuil à 80 °C). Correctifs : **100 nF au
-point milieu de chaque pont** (matériel) et une temporisation à N
-échantillons consécutifs sur le modèle de `CTRL_VIN_UV_COUNTS` (logiciel).
-Ni l'un ni l'autre n'est fait.
+**Voies NTC non tamponnées — traité en logiciel le 23/08, correctif
+matériel encore ouvert.** Un seul échantillon aberrant verrouillait la
+carte. `SAFETY_OVERTEMP_COUNTS` impose désormais **1 seconde** de
+dépassement continu, décimée sur les séquences ADC.
+
+> **Le piège qu'il a fallu traiter** : la boucle principale est libre, sans
+> cadencement. Un compteur « N passages de boucle » aurait compté N fois le
+> **même** échantillon ADC latché et n'aurait rien filtré du tout, tout en
+> ayant l'air correct. On compte donc des **séquences ADC**
+> (`adc_get_sequence_count()`), pas des tours de boucle.
+
+Comportement observé : le code 5 disparaît jusqu'à 430 V, réapparaît à
+440 V avec 50 ms de temporisation. **Effet de seuil, pas de degré** — la
+signature d'une rectification dans les diodes de protection de l'entrée
+ADC. Sous le seuil de conduction le RC filtre ; au-dessus, il se fabrique
+du **continu**, que rien ne filtre. La temporisation à 1 s est autant un
+**discriminateur** qu'un correctif.
+
+Correctif matériel, toujours à faire si le code 5 revient : **100 nF au
+POINT MILIEU de chaque pont**, au plus près de la thermistance. Attention,
+ce n'est **pas** ce qui est monté : le schéma porte un 10 kΩ série puis
+10 nF (C8, C24) **en aval**, ce qui filtre ce qui arrive à l'ADC mais
+laisse le point milieu à 5 kΩ, non bypassé — et c'est là, à 5 mm des
+MOSFET, que le couplage se produit.
+
+Passer à des NTC de plus faible valeur ne sert à rien : la série B57\*V5 en
+0805 s'arrête à **4,7 kΩ**, aucune valeur basse n'a β = 4000, et
+l'auto-échauffement n'était de toute façon pas la limite (0,8 °C pour un
+pont 1 k/1 k, `δth` = 3,5 mW/K).
 
 **Angle mort de la protection de sous-tension.** `s_vin_armed` ne passe à
 vrai qu'après un premier franchissement de 12 V. Une alimentation qui
@@ -379,8 +522,17 @@ d'armement plutôt que seuil.
 tenaient le matin, puissance coupée, et tombaient toutes les deux ou trois
 lectures dès que la carte convertissait. Couplage du bruit de commutation
 dans le JTAG très probable — le même mécanisme a déjà été identifié sur les
-voies analogiques (nappe, `adc.h`). Pistes : raccourcir le câble JTAG,
-descendre TCLK sous 1 MHz.
+voies analogiques (nappe, `adc.h`).
+
+> **23/08 : la piste TCLK est FERMÉE.** La sonde XDS100v3 **échoue au test
+> de connexion en dessous de 1 MHz**. Ne pas y revenir. Le `.ccxml` a été
+> essayé à 100 kHz et laissé **non commité** pour cette raison — s'il
+> réapparaît modifié dans l'arbre de travail, c'est ce reliquat.
+>
+> Reste : raccourcir le câble. Et surtout **concevoir les essais pour se
+> passer du débogueur sous puissance** — c'est ce que fait
+> `ADC_TRIG_SWEEP` (§5), et le modèle est réutilisable pour toute grandeur
+> qu'on voudrait balayer en marche.
 
 **Plus anciens, non traités** : sortir LED1 du pont de mesure ;
 caractériser la compression de IOUT (−12 % de 27 à 104 mA) ;
@@ -437,21 +589,37 @@ défaut : vérifier lequel des deux champs est affiché.
 
 ## 10. Ordre proposé pour la reprise
 
-1. **Confirmer l'état de la piste réparée**, et que 400 V / 50 kΩ tient
-   plus d'une minute. C'est la validation qui manque à HRPWM.
-2. **Inverser la convention de l'Action Qualifier** (§5, en priorité) pour
-   rendre le front de coupure fixe. À faire à froid, en début de session,
-   en traitant explicitement le renversement du codage de `duty = 0`.
-   Revérifier `EDGMODE` derrière, avec le protocole du §4.
-3. **Mesurer ce que ça donne au-dessus de 400 V.** Si le front de coupure
-   fixe suffit à faire disparaître le `overI1`, le blanking devient
-   inutile — et on aura supprimé la cause au lieu de masquer l'effet.
-4. **Le blanking seulement si nécessaire** (§5, repli). Il sera de toute
-   façon plus simple : fenêtre ancrée au passage à zéro, sans piloter
-   `DCFOFFSET` depuis l'ISR.
-5. **Marche A** de l'escalier (§6) : 300 V / 10 kΩ, et surtout mesurer le
-   rendement réel.
-6. Décider de Vin avant les marches C et D.
+Les points 1 à 4 de la version précédente sont **faits** : inversion AQ,
+mesure au-dessus de 400 V, blanking essayé et retiré. La montée en tension
+n'est plus le sujet — **500 V est atteint à vide**. Le sujet devient la
+**charge** et la **fiabilité des composants**.
 
-Les correctifs de confort — temporisation NTC, armement de la sous-tension
-— peuvent s'intercaler à tout moment ; ils ne bloquent rien.
+1. 🔴 **`EDGMODE` de l'étage 1 n'a JAMAIS été revérifié au banc.** Il est
+   passé à `HR_FEP` par déduction — le Dead-Band inverse le niveau,
+   l'Action Qualifier échange quel front CMPA commande, deux inversions qui
+   ne se compensent pas. Mais la position du MEP dans la chaîne avait été
+   établie *par la mesure* le 23/08, pas par la documentation. **Refaire le
+   protocole du §4** : duty figé, mesure par PosDuty, trois points pour la
+   monotonie. C'est la dette la plus ancienne de la session.
+2. 🔴 **Caractériser le délestage**, à 300 V d'abord puis 500 V. Voir
+   l'avertissement du §5 : Kp a été divisé par deux et il ne reste que 20 V
+   de marge. C'est le risque principal aujourd'hui.
+3. 🔴 **MOSFET étage 2 → NTD100N70GN1.** On tourne à 500 V sur un 600 V.
+4. **Trancher le calibre en tension de la MSS1583** (400 V publié, 500 V
+   appliqué) — un mail à Coilcraft suffit à savoir si le calibre vise
+   l'enroulement ou le noyau.
+5. **Marche A** de l'escalier (§6) : 300 V / 10 kΩ, et surtout mesurer le
+   **rendement réel**, dont dépend tout le tableau de puissance.
+6. **Étage 1 → SER2211-333** (33 µH, Isat 7,10 A) avant la pleine
+   puissance. La 473 montée aujourd'hui (Isat 4,40 A) passe les premières
+   marches, pas les dernières.
+7. Décider de Vin avant les marches C et D.
+
+**Point ouvert non tranché** : `overV1`. Il coupait à 410 V après 2 minutes
+avant les correctifs de boucle, et ne s'est plus manifesté depuis. Les
+trois causes du §7 restent ouvertes. La mesure qui les départagerait est
+gratuite : **un multimètre sur V1 pendant la montée**. Si l'affichage
+annonce 87 V pendant que le multimètre lit 75, c'est la chaîne de mesure.
+
+Les correctifs de confort — armement de la sous-tension — peuvent
+s'intercaler à tout moment ; ils ne bloquent rien.

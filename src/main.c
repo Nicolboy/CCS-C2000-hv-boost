@@ -53,21 +53,55 @@ static volatile uint16_t s_ticks_since_cmd = LINK_TIMEOUT_TICKS;
 static bool s_overtemp_t1 = false;
 static bool s_overtemp_t2 = false;
 
-static bool update_one_overtemp(bool current, float temp_c)
+// ANTI-REBOND. Nombre de mesures consecutives au-dessus du seuil, et
+// derniere sequence ADC prise en compte. Justification complete dans
+// calib.h, section SAFETY_OVERTEMP_COUNTS.
+static uint16_t s_overtemp_cnt_t1 = 0U;
+static uint16_t s_overtemp_cnt_t2 = 0U;
+static uint32_t s_overtemp_last_seq = 0U;
+
+static bool update_one_overtemp(bool current, uint16_t *count, float temp_c)
 {
-    if (!current)
+    if (current)
     {
-        return (temp_c >= SAFETY_OVERTEMP_C);
+        // RELACHEMENT : hysteresis seule, sans temporisation. De ce cote un
+        // echantillon aberrant ne peut que RETARDER le retour au normal,
+        // jamais provoquer une coupure -- il n'y a rien a proteger.
+        // Compteur remis a zero pour qu'un declenchement ulterieur reclame
+        // de nouveau la sequence complete.
+        *count = 0U;
+        return (temp_c > (SAFETY_OVERTEMP_C - SAFETY_OVERTEMP_HYST_C));
     }
-    return (temp_c > (SAFETY_OVERTEMP_C - SAFETY_OVERTEMP_HYST_C));
+
+    if (temp_c < SAFETY_OVERTEMP_C)
+    {
+        *count = 0U;
+        return false;
+    }
+
+    (*count)++;
+    return (*count >= SAFETY_OVERTEMP_COUNTS);
 }
 
 static void update_overtemp(void)
 {
-    s_overtemp_t1 =
-        update_one_overtemp(s_overtemp_t1, measure_temp(adc_get_raw(ADC_CH_T1)));
-    s_overtemp_t2 =
-        update_one_overtemp(s_overtemp_t2, measure_temp(adc_get_raw(ADC_CH_T2)));
+    // DECIMATION. La boucle principale est libre : sans ce garde-fou elle
+    // relirait la meme valeur ADC latchee des milliers de fois, et le
+    // compteur ci-dessous compterait N fois le MEME echantillon aberrant.
+    // L'anti-rebond n'aurait alors aucun effet tout en paraissant correct.
+    // La soustraction non signee reste juste au rebouclage du compteur.
+    uint32_t seq = adc_get_sequence_count();
+
+    if ((uint32_t)(seq - s_overtemp_last_seq) < SAFETY_OVERTEMP_DECIM_SEQ)
+    {
+        return;
+    }
+    s_overtemp_last_seq = seq;
+
+    s_overtemp_t1 = update_one_overtemp(s_overtemp_t1, &s_overtemp_cnt_t1,
+                                        measure_temp(adc_get_raw(ADC_CH_T1)));
+    s_overtemp_t2 = update_one_overtemp(s_overtemp_t2, &s_overtemp_cnt_t2,
+                                        measure_temp(adc_get_raw(ADC_CH_T2)));
 }
 
 // Autorise la conversion : sorties PWM debridees et etages valides. Le duty
@@ -557,6 +591,48 @@ void main(void)
 // (division logicielle sur C28x).
 #define TELEMETRY_PERIOD_TICKS  30U // 300 ms
 
+#if ADC_TRIG_SWEEP
+// Balayage automatique de l'instant d'echantillonnage. Voir calib.h.
+//
+// Expose au debogueur pour la relecture APRES coup, puissance coupee : la
+// session JTAG ne tient pas pendant que la carte commute, c'est toute la
+// raison d'etre de ce balayage. Le pas courant se lit donc a l'arret, ou
+// se deduit en comptant les intervalles depuis RUN.
+volatile int16_t g_adc_trig_sweep_step = 0;
+
+static void adc_trig_sweep_tick(bool running)
+{
+    static uint16_t dwell = 0U;
+
+    if (!running)
+    {
+        // Reset a l'arret : chaque essai repart du meme point, sinon deux
+        // montees successives ne seraient pas comparables.
+        dwell = 0U;
+        g_adc_trig_sweep_step = -(ADC_TRIG_SWEEP_STEPS / 2);
+        g_adc_trig_lead = (int16_t)(ADC_TRIG_LEAD_COUNTS
+                                    + g_adc_trig_sweep_step * ADC_TRIG_SWEEP_STEP);
+        return;
+    }
+
+    // Fige a la derniere valeur au lieu de reboucler : un releve tardif
+    // reste interpretable.
+    if (g_adc_trig_sweep_step >= (ADC_TRIG_SWEEP_STEPS / 2))
+    {
+        return;
+    }
+
+    dwell++;
+    if (dwell >= ADC_TRIG_SWEEP_DWELL_TICKS)
+    {
+        dwell = 0U;
+        g_adc_trig_sweep_step++;
+        g_adc_trig_lead = (int16_t)(ADC_TRIG_LEAD_COUNTS
+                                    + g_adc_trig_sweep_step * ADC_TRIG_SWEEP_STEP);
+    }
+}
+#endif
+
 interrupt void cpu_timer0_isr(void)
 {
     static uint16_t telemetry_tick = 0;
@@ -564,6 +640,10 @@ interrupt void cpu_timer0_isr(void)
     CpuTimer0.InterruptCount++;
 
     status_led_tick();
+
+#if ADC_TRIG_SWEEP
+    adc_trig_sweep_tick(g_last_cmd.run);
+#endif
 
     if (s_ticks_since_cmd < LINK_TIMEOUT_TICKS)
     {

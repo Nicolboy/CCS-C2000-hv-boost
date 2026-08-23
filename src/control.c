@@ -177,6 +177,24 @@ static int32_t shl_signed(int32_t v, uint16_t n)
     return (v << n);
 }
 
+// Decalage a DROITE d'une valeur signee. `v >> n` sur un negatif n'est pas
+// indefini mais reste DEFINI PAR L'IMPLEMENTATION : la norme laisse le
+// choix entre decalage arithmetique et logique. On decale la valeur absolue
+// et on rend le signe, ce qui tronque vers zero de facon SYMETRIQUE.
+//
+// La symetrie compte ici : appliquee au terme proportionnel, une troncature
+// asymetrique introduirait un biais systematique dont le signe dependrait
+// de celui de l'erreur -- l'integrateur le compenserait en permanence, avec
+// une erreur statique residuelle a la clef.
+static int32_t shr_signed(int32_t v, uint16_t n)
+{
+    if (v < 0)
+    {
+        return -((-v) >> n);
+    }
+    return (v >> n);
+}
+
 // ---- PID, en virgule fixe ----------------------------------------------
 //
 //   duty_counts = P + I + D
@@ -226,7 +244,13 @@ static int32_t regulate(uint16_t i, int32_t measured_raw)
     // Agit dans le pas MEME ou l'ecart apparait. C'est lui, et lui seul, qui
     // peut repondre a un delestage : l'integrateur, par construction, a
     // besoin de plusieurs pas pour batir sa correction.
-    p_term = shl_signed(error, CTRL_KP_SHIFT + PWM_DUTY_FRAC_BITS);
+    // Kp effectif = 2^CTRL_KP_SHIFT / 2^CTRL_KP_DIV_SHIFT. Le decalage a
+    // gauche ne pouvant pas descendre sous 0, la division en est separee.
+    // L'ordre compte : on decale a gauche D'ABORD, donc la troncature de la
+    // division porte sur une valeur deja mise a l'echelle Q8 et ne coute
+    // pas de resolution sur l'erreur elle-meme.
+    p_term = shr_signed(shl_signed(error, CTRL_KP_SHIFT + PWM_DUTY_FRAC_BITS),
+                        CTRL_KP_DIV_SHIFT);
 
     // ---- I : integral ---------------------------------------------------
     // Supprime l'erreur statique. L'accumulateur est borne aux memes limites

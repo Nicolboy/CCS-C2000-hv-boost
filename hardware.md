@@ -77,7 +77,7 @@ Orchestrateur (agent/script)  --HTTP-->  ESP32-C3  --UART 57600 $C/$T-->  TMS320
 | `I-HV-adc` | 7 | ADCINA3 | IOUT | ~55 mA (théorique) |
 | `I-shunt2-adc` | **5** | ADCINA4 / **COMP2A** / AIO4 | I2 + protection étage 2 | idem I1 |
 | `V-HV-adc` | **14** | ADCINB2 / AIO10 | VOUT | 600 V |
-| `V-inter-adc` | **16** | ADCINB4 / AIO12 | V1 | 103 V |
+| `V-inter-adc` | **16** | ADCINB4 / AIO12 | V1 | **96,6 V** |
 | `Temp1` | 17 | ADCINB6 / AIO14 | NTC étage 1 | — |
 | `Temp2` | 18 | ADCINB7 | NTC étage 2 | — |
 | libre | 13, 15 | ADCINB1, ADCINB3 | réserve mesure future | — |
@@ -282,6 +282,14 @@ Conversion brut → volts : `Vadc = raw × 3,3 / 4096`.
 
 ### Conséquence du nouveau gain V1 sur les seuils
 
+> ⚠️ **PLEINE ÉCHELLE V1 = 96,6 V, PAS 103.** Les 103 V dataient du gain
+> V0.1 (30,82). Avec le gain V0.2 mesuré (29,27), la conversion vaut
+> `4096 / (3,3 × 29,27) = 42,4 raw/V`, soit **96,6 V**. La coupure portée à
+> 82 V le 23/08/2026 est donc à **85 %** de l'échelle, pas 80. L'invariant
+> « la mesure ne sature jamais avant que la protection n'agisse » tient
+> toujours, avec moins de marge qu'annoncé. Au-delà de 90 V il faudrait
+> revoir le pont diviseur.
+
 Les seuils de `control.c` sont recalculés depuis le gain à la compilation,
 ils redeviennent donc justes automatiquement. Mais **tant que le gain V0.1
 était en place sur la carte V0.2**, ils tombaient 5,3 % trop bas :
@@ -333,7 +341,7 @@ d'entrée**, jusqu'aux 10 V de conception. La pleine échelle de la chaîne
 |---|---|---|
 | I1 crête | **7,0 A** (V0.2) — code DAC 738 | matériel (comparateur + Trip Zone one-shot) |
 | I2 crête | ⚠️ **~4,9 A effectifs**, pas 7,0 A — voir ci-dessous | matériel (idem) |
-| V1 | 55 V | logiciel, ISR ADC, sur valeur brute |
+| V1 | **82 V** (23/08/2026, consigne portée à 75 V) | logiciel, ISR ADC, sur valeur brute |
 | VOUT | 520 V | logiciel, ISR ADC, sur valeur brute |
 | VIN (sous-tension) | 9,5 V, armée après passage à 12 V, anti-rebond 5 séquences | logiciel |
 | T1 / T2 | 80 °C, hystérésis 10 °C | logiciel (thermique = lente, pas de chemin matériel requis) |
