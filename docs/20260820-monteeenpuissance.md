@@ -194,7 +194,70 @@ l'a atténuée sans la supprimer.
 > `calib.h` et ça reste vrai. La protection agit déjà sur la moyenne et non
 > sur le crête.
 
-### La réponse : le blanking
+### La réponse à explorer EN PRIORITÉ : inverser la convention de l'AQ
+
+Idée de Nicolas, 23/08/2026. Elle **invalide** une affirmation écrite dans
+`calib.h` — que la position des fronts de coupure serait « structurellement »
+impossible à maîtriser. C'est faux : elle ne l'est qu'avec la convention
+actuelle.
+
+**Aujourd'hui** : `AQCTLA.ZRO = AQ_SET`, `AQCTLA.CAU = AQ_CLEAR`. La
+conduction occupe `0 → CMPA`. Le MOSFET s'amorce à `CTR = 0` (fixe) et se
+**bloque sur CMPA** (mobile). C'est donc le front destructeur qui se
+déplace, puisque c'est lui qui interrompt le courant d'inductance.
+
+**Proposition** : `AQCTLA.ZRO = AQ_CLEAR`, `AQCTLA.CAU = AQ_SET`. La
+conduction occupe `CMPA → PRD`. Le MOSFET s'amorce sur CMPA (mobile) et se
+**bloque au passage à zéro** (fixe). L'amorçage rayonne beaucoup moins : il
+établit le courant dans une inductance, il ne l'interrompt pas.
+
+Trois gains d'un coup :
+
+1. **Le blanking devient trivial.** La fenêtre s'ancre sur
+   `PULSESEL = DC_PULSESEL_ZERO` avec un décalage constant. Tout le
+   contournement par `DCFOFFSET` piloté depuis l'ISR (décrit plus bas)
+   disparaît.
+2. **Le déphasage entre les deux étages redevient utile.** Les deux fronts
+   de coupure étant fixes, ils sont séparables à **tous** les points de
+   fonctionnement — ce que `PWM_STAGE2_PHASE_COUNTS` donne aujourd'hui pour
+   impossible.
+3. **L'instant d'échantillonnage de l'ADC** cesse de dériver par rapport à
+   la commutation.
+
+#### Ce qu'il faut traiter
+
+**Le sens du rapport cyclique s'inverse** : `CMPA = période − duty`. Une
+soustraction dans `pwm_set_duty_q8()`.
+
+**`PWM_HRPWM_EDGMODE` doit repasser à `HR_FEP`.** À la broche, CMPA
+produirait désormais le front descendant. À revérifier avec le protocole
+exact du §4 — duty figé, mesure par PosDuty, dix minutes.
+
+**`pwm_apply_adc_trigger()` doit être refait.** La mi-conduction n'est plus
+`CMPA/2` mais `(CMPA + PRD)/2`.
+
+**LE PIÈGE SÉRIEUX.** Aujourd'hui `duty = 0` s'écrit `CMPA = 0`. Après
+inversion, `CMPA = 0` signifierait **conduction pendant toute la période**.
+L'état de repos et l'état de pleine conduction échangent leur codage.
+
+L'inhibition réelle passe par `AQCSFRC`, qui force la sortie indépendamment
+de CMPA, donc le chemin de sécurité tient. Mais tout endroit du code qui
+écrirait un zéro « par prudence » produirait exactement l'inverse de ce
+qu'il croit faire. C'est le genre de renversement qui coûte un MOSFET, et
+il y en a déjà eu un sur ce banc.
+
+Traitement : un `#define` pour la valeur de repos, un garde-fou de
+compilation, et le commentaire qui l'explique. À faire **délibérément**.
+
+#### Pourquoi en priorité
+
+Ça supprime la cause au lieu de masquer l'effet, et ça rend le blanking
+beaucoup plus simple si on le fait quand même. Mais c'est un changement de
+convention qui touche `pwm.c`, `control.c`, le déclenchement ADC et l'état
+de repos : **à faire en début de session, à froid**, pas en fin de
+campagne.
+
+### La solution de repli : le blanking
 
 Vérifié dans les en-têtes du F2802x le 23/08. **Oui, la fenêtre
 d'aveuglement peut alimenter l'événement que `TZSEL` utilise déjà** — pas
@@ -376,12 +439,19 @@ défaut : vérifier lequel des deux champs est affiché.
 
 1. **Confirmer l'état de la piste réparée**, et que 400 V / 50 kΩ tient
    plus d'une minute. C'est la validation qui manque à HRPWM.
-2. **Implémenter le blanking** (§5), avec `DCFOFFSET` piloté depuis l'ISR
-   pour suivre le front de CMPA. C'est ce qui débloque la montée au-dessus
-   de 400 V.
-3. **Marche A** de l'escalier (§6) : 300 V / 10 kΩ, et surtout mesurer le
+2. **Inverser la convention de l'Action Qualifier** (§5, en priorité) pour
+   rendre le front de coupure fixe. À faire à froid, en début de session,
+   en traitant explicitement le renversement du codage de `duty = 0`.
+   Revérifier `EDGMODE` derrière, avec le protocole du §4.
+3. **Mesurer ce que ça donne au-dessus de 400 V.** Si le front de coupure
+   fixe suffit à faire disparaître le `overI1`, le blanking devient
+   inutile — et on aura supprimé la cause au lieu de masquer l'effet.
+4. **Le blanking seulement si nécessaire** (§5, repli). Il sera de toute
+   façon plus simple : fenêtre ancrée au passage à zéro, sans piloter
+   `DCFOFFSET` depuis l'ISR.
+5. **Marche A** de l'escalier (§6) : 300 V / 10 kΩ, et surtout mesurer le
    rendement réel.
-4. Décider de Vin avant les marches C et D.
+6. Décider de Vin avant les marches C et D.
 
 Les correctifs de confort — temporisation NTC, armement de la sous-tension
 — peuvent s'intercaler à tout moment ; ils ne bloquent rien.
