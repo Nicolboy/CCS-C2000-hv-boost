@@ -1360,13 +1360,19 @@
 // aucun effet et on conclurait a tort que le MEP ne fonctionne pas.
 // L'essai de front exige donc STAGE1 a 1.
 //
-// ETAGE 1 ACTIF depuis le 23/08/2026, front valide au banc (cf. EDGMODE).
-// ETAGE 2 laisse a 0 : a activer apres verification de l'etage 1 en
-// regulation reelle. Le mecanisme est le meme et l'inversion Dead-Band est
-// identique sur les deux, mais on ne met pas la haute tension en jeu sur
-// une extrapolation.
+// LES DEUX ACTIFS depuis le 23/08/2026, front valide au banc (cf. EDGMODE).
+//
+// Etage 1 verifie en regulation reelle : V1 = 50,1 V au multimetre, et la
+// commande sort a 45,625 counts -- donc la fraction est bien appliquee.
+// Aucune amelioration visible de son comportement, et c'etait attendu : a
+// 0,42 V par count, la resolution n'a jamais ete le facteur limitant sur
+// cet etage. Ce qui fait bouger son rapport cyclique de trois ou quatre
+// counts a vide, c'est le bruit de mesure sur V1 amplifie par le gain du
+// convertisseur en conduction discontinue -- HRPWM n'y peut rien.
+//
+// L'etage 2 est celui pour lequel tout ceci a ete fait : 8,3 V par count.
 #define PWM_HRPWM_STAGE1     1
-#define PWM_HRPWM_STAGE2     0
+#define PWM_HRPWM_STAGE2     1
 
 // ---- QUEL FRONT LE MEP DOIT-IL DEPLACER ? ---------------------------
 //
