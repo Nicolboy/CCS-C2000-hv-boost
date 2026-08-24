@@ -5,6 +5,15 @@
         <instance XML_version="1.2" desc="Texas Instruments XDS100v3 USB Debug Probe_0" href="connections/TIXDS100v3_Dot7_Connection.xml" id="Texas Instruments XDS100v3 USB Debug Probe_0" xml="TIXDS100v3_Dot7_Connection.xml" xmlpath="connections"/>
         <connection XML_version="1.2" id="Texas Instruments XDS100v3 USB Debug Probe_0">
             <instance XML_version="1.2" href="drivers/tixds100v2c28x.xml" id="drivers" xml="tixds100v2c28x.xml" xmlpath="drivers"/>
+            <property id="The Converter Usage" Type="choicelist" Value="0">
+                <choice Name="Its bypassed, use 1149.1, mimic XDS100v2" value="nothing">
+                    <property id="The Emulator 1149.1 Frequency" Type="choicelist" Value="0">
+                        <choice Name="Fixed with user specified slower value" value="specific">
+                            <property id="-- Enter a value from 488Hz to 1.0MHz" Type="stringfield" Value="100KHz"/>
+                        </choice>
+                    </property>
+                </choice>
+            </property>
             <platform XML_version="1.2" id="platform_0">
                 <instance XML_version="1.2" desc="TMS320F28027_0" href="devices/f28027.xml" id="TMS320F28027_0" xml="f28027.xml" xmlpath="devices"/>
             </platform>

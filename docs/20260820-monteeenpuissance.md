@@ -585,6 +585,37 @@ entre elles) ou un **halt** du cœur pour figer un instantané.
 200 V alors que le multimètre en lit 50 sur V1 n'est pas forcément en
 défaut : vérifier lequel des deux champs est affiché.
 
+**Dans un `.ccxml`, `Value` est un INDEX, pas un contenu.** Le fichier
+`targetConfigs/TMS320F28027.ccxml` contient ceci, et c'est **normal** :
+
+```xml
+<property id="The Emulator 1149.1 Frequency" Type="choicelist" Value="0">
+    <choice Name="Fixed with user specified slower value" ...>
+        <property id="-- Enter a value from 488Hz to 1.0MHz" Value="100KHz"/>
+```
+
+Lire « 100KHz » et en conclure que TCLK vaut 100 kHz est **faux**.
+`Value="0"` désigne l'**index du choix sélectionné** dans la liste ; les
+éléments `<choice>` présents sont ceux dont CCS a mémorisé un sous-état
+un jour, sélectionnés ou non. Ici le choix actif est le défaut à 1 MHz,
+et le « 100KHz » est la valeur retenue d'un essai du 23/08 sous un choix
+qui n'est plus actif.
+
+**Ce résidu ne se nettoie pas par l'interface** — CCS le conserve
+volontairement pour le re-proposer. Ne pas perdre de temps à essayer.
+
+**Et le réglage vit à trois endroits**, ce qui est la vraie leçon, la même
+que celle d'`AllowInterruptsWhenHalted` au §3.1 :
+
+| fichier | rôle |
+|---|---|
+| `targetConfigs/*.ccxml` | config du projet, versionnée |
+| `.theia/launch.json` | surcharges de lancement — c'est là qu'était le mode temps réel |
+| `%TEMP%\ti_cloud_storage\local.ccxml` | copie de travail, non versionnée, effaçable |
+
+Quand un comportement de débogage résiste, vérifier les **trois**, pas
+seulement le premier.
+
 ---
 
 ## 10. Ordre proposé pour la reprise
