@@ -1751,6 +1751,32 @@ ERREUR_seuil_etage2_au_dela_de_la_reference_DAC_baisser_SAFETY_ISHUNT_THRESHOLD_
 // les deux divisions se cumulent, Kp vaut donc 0,25 sur cet etage. Le
 // defaut de cette valeur est connu et documente ci-dessus -- il est
 // contourne par le sequencement, pas corrige.
+// ---- LIMITATION DE VITESSE DU RAPPORT CYCLIQUE (24/08/2026) ------------
+// Variation maximale du duty par pas de regulation, en COUNTS entiers.
+//
+// POURQUOI PAS UN PLAFOND. On avait d'abord envisage d'abaisser CTRL_DUTY_MAX
+// sur l'etage 1. C'est impossible : au pire cas -- Vin = 9,5 V (seuil de
+// sous-tension) et V1 = 77 V -- il faut D = 1 - 9,5/77 = 0,877. Un plafond
+// utile mordrait sur le fonctionnement normal.
+//
+// Ce qui compte n'est pas la valeur atteinte, c'est la VITESSE a laquelle on
+// y va : le courant d'inductance se construit periode apres periode, et
+// c'est une montee en quelques cycles qui fait la pointe.
+//
+// DIMENSIONNEMENT. 4 counts par tick sur une plage de 285 (0,95 x 300) font
+// 71 ticks a 20,4 kHz, soit 3,5 ms pour traverser toute la plage. La bande
+// passante visee est de 300 Hz, soit 3,3 ms de periode : le limiteur se
+// place donc JUSTE AU-DELA de la bande utile. Il n'intervient pas dans la
+// regulation, il n'arrete que l'emballement.
+//
+// L'integrateur est gele quand le limiteur mord -- meme traitement que la
+// saturation, et pour la meme raison : accumuler une avance que la sortie ne
+// peut pas suivre, c'est preparer un depassement.
+//
+// A REGLER APRES le relevement de Kp, pas avant : c'est Kp qui fixe la
+// vitesse demandee, ce limiteur ne fait que la borner.
+#define CTRL_DUTY_SLEW_MAX_COUNTS   4U
+
 #define CTRL_GAIN_DIV_SHIFT_S1    1U   // etage 1 : gain divise par deux
 #define CTRL_GAIN_DIV_SHIFT_S2    0U   // etage 2 : gain d'origine
 

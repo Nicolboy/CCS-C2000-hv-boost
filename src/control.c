@@ -236,10 +236,11 @@ static int32_t shr_signed(int32_t v, uint16_t n)
 // passage en Q8 est fait ici, au dernier moment, par le seul decalage
 // supplementaire de PWM_DUTY_FRAC_BITS. Il n'y a donc rien a re-regler.
 //
-// Consequence a noter sur l'integrateur : sa borne est INCHANGEE. i_term
-// vaut accum >> (KI_SHIFT - FRAC) au lieu de accum >> KI_SHIFT, et sa
-// borne doit valoir duty_max_q8 = duty_max << FRAC ; les deux decalages se
-// compensent exactement et s_accum_max reste duty_max << KI_SHIFT.
+// Consequence a noter sur l'integrateur : i_term vaut accum >> (KI_SHIFT -
+// FRAC) au lieu de accum >> KI_SHIFT, et sa borne doit valoir duty_max_q8 =
+// duty_max << FRAC ; ces deux decalages-la se compensent exactement.
+// k_gain_div_shift, lui, ne se compense PAS et doit figurer dans la borne --
+// voir control_init(), c'est l'omission qui a fausse la boucle jusqu'au 24/08.
 //
 // Renvoie l'erreur, dont l'appelant se sert pour juger de l'etablissement.
 #if (CTRL_KI_SHIFT <= PWM_DUTY_FRAC_BITS)
@@ -317,7 +318,13 @@ static int32_t regulate(uint16_t i, int32_t measured_raw)
     if (duty > duty_max || duty < 0)
     {
         s_accum[i] = accum_prev;
-        i_term = accum_prev >> (CTRL_KI_SHIFT - PWM_DUTY_FRAC_BITS);
+        // k_gain_div_shift[i] est INDISPENSABLE ici : sans lui la relecture
+        // ne coincide pas avec celle du calcul normal plus haut, et i_term
+        // ressort DOUBLE sur l'etage 1 -- dans la branche meme ou la boucle
+        // passe son temps quand elle sature. Meme omission que celle qui
+        // avait fausse s_accum_max, corrigee le 24/08.
+        i_term = accum_prev >> (CTRL_KI_SHIFT - PWM_DUTY_FRAC_BITS
+                                + k_gain_div_shift[i]);
         duty = p_term + i_term + d_term;
 
         if (duty > duty_max)
@@ -327,6 +334,33 @@ static int32_t regulate(uint16_t i, int32_t measured_raw)
         else if (duty < 0)
         {
             duty = 0;
+        }
+    }
+
+    // ---- Limitation de VITESSE du rapport cyclique -----------------------
+    // Le duty peut aller ou il veut, mais pas d'un bond. Voir
+    // CTRL_DUTY_SLEW_MAX_COUNTS dans calib.h pour le dimensionnement et pour
+    // la raison qui interdit d'employer un simple plafond a la place.
+    //
+    // s_coast_duty_q8[i] sert de valeur precedente : il est deja ecrit plus
+    // bas a chaque pas de regulation ET tenu a jour par coast_stage(), donc
+    // il ne peut pas se desynchroniser -- y compris a la sortie d'une
+    // extinction sequencee, ou repartir d'une valeur perimee produirait
+    // exactement le bond qu'on cherche a interdire.
+    {
+        int32_t prev = s_coast_duty_q8[i];
+        int32_t slew = ((int32_t)CTRL_DUTY_SLEW_MAX_COUNTS)
+                       << PWM_DUTY_FRAC_BITS;
+
+        if ((duty - prev) > slew)
+        {
+            duty = prev + slew;
+            s_accum[i] = accum_prev;
+        }
+        else if ((prev - duty) > slew)
+        {
+            duty = prev - slew;
+            s_accum[i] = accum_prev;
         }
     }
 
@@ -361,41 +395,32 @@ void control_init(void)
 
         s_duty_max_counts[i] = (uint16_t)(CTRL_DUTY_MAX * (float)period);
 
-        // ---- BORNE DE L'INTEGRATEUR : INCOHERENTE, ET LAISSEE AINSI -----
+        // ---- BORNE DE L'INTEGRATEUR ------------------------------------
+        // i_term se lit accum >> (CTRL_KI_SHIFT - PWM_DUTY_FRAC_BITS +
+        // k_gain_div_shift[i]) et doit plafonner a duty_max_q8, c'est-a-dire
+        // duty_max_counts << PWM_DUTY_FRAC_BITS. En composant les deux, la
+        // borne vaut donc duty_max_counts << (KI_SHIFT + k_gain_div_shift).
         //
-        // LE DEFAUT. Depuis l'ajout de k_gain_div_shift dans le terme
-        // integral, le decalage reellement applique vaut
-        // (CTRL_KI_SHIFT - PWM_DUTY_FRAC_BITS + k_gain_div_shift[i]), mais
-        // cette borne-ci l'ignore. Sur l'etage 1, ou k_gain_div_shift = 1,
-        // i_term plafonne donc a 142 counts alors que le regime etabli en
-        // demande 220 a Vin = 20 V et V1 = 75 V. La boucle degenere en
-        // proportionnel pur des qu'elle est chargee.
+        // HISTORIQUE, parce que ce decalage a coute cher. k_gain_div_shift
+        // avait ete ajoute au terme integral sans l'etre ici : sur l'etage 1
+        // (k_gain_div_shift = 1) i_term plafonnait a la MOITIE de la plage,
+        // et la boucle degenerait en proportionnel pur des qu'elle etait
+        // chargee. Signature mesuree le 24/08 : consigne 75 V, 75 V affiches
+        // a vide et 69 V en charge. Une erreur statique qui SUIT LA CHARGE
+        // accuse toujours l'integrateur, jamais le gain proportionnel.
         //
-        // C'EST MESURE : consigne 75 V, multimetre 81 V a vide et 72 V sous
-        // 25 kOhms ; cote carte, 0 V d'erreur a vide et 7 V en charge. A
-        // vide le duty requis est faible et l'integrateur n'est pas ecrete ;
-        // en charge il l'est. Une erreur statique qui SUIT LA CHARGE accuse
-        // toujours l'integrateur, jamais le gain proportionnel.
+        // Le bug agissait comme un LIMITEUR DE COURANT involontaire : il
+        // interdisait a l'etage 1 d'atteindre CTRL_DUTY_MAX = 0,95. Une
+        // premiere tentative de correction, seule, avait donc produit overI1
+        // a la fermeture de HV_EN -- elle decouvrait une fragilite
+        // preexistante au lieu de la creer.
         //
-        // POURQUOI ON NE LE CORRIGE PAS ICI. Corriger la borne seule REND A
-        // L'ETAGE 1 L'ACCES A CTRL_DUTY_MAX = 0,95, et il y va sur un
-        // echelon de charge -- la fermeture de HV_EN. A D = 0,95 l'ondulation
-        // vaut 20 x 0,95 x 5 us / 47 uH = 2,0 A par periode, contre 1,0 A a
-        // D = 0,47 : le seuil de 5 A est atteint en quelques cycles.
-        // Constate au banc le 24/08, defaut overI1 a la fermeture de HV_EN,
-        // alors que la version au bornage fautif passait.
-        //
-        // Autrement dit, le bug agissait comme un LIMITEUR DE COURANT
-        // involontaire, et le supprimer decouvre une fragilite preexistante :
-        // la boucle de l'etage 1 ne sait pas encaisser un echelon de charge.
-        //
-        // CE QU'IL FAUDRA FAIRE, ensemble et pas separement :
-        //   - corriger cette borne ;
-        //   - ET borner le duty de l'etage 1 a ce dont il a reellement besoin
-        //     (0,87 au pire, a Vin = 9,5 V) au lieu de 0,95 ;
-        //   - ET/OU sequencer la fermeture de HV_EN comme on a sequence son
-        //     ouverture, pour supprimer l'echelon plutot que de l'encaisser.
-        s_accum_max[i] = ((int32_t)s_duty_max_counts[i]) << CTRL_KI_SHIFT;
+        // Elle n'est levee maintenant que parce que les DEUX parades sont en
+        // place : CTRL_DUTY_SLEW_MAX_COUNTS borne la vitesse de montee du
+        // duty, et HV_ON_COAST_SEQ supprime l'echelon de charge au lieu de le
+        // faire encaisser a la boucle. Ne pas retirer l'une sans l'autre.
+        s_accum_max[i] = ((int32_t)s_duty_max_counts[i])
+                         << (CTRL_KI_SHIFT + k_gain_div_shift[i]);
 
         // Plancher de l'extinction sequencee, en Q8 counts. Calcule ici et
         // pas dans coast_stage() : la periode differe d'un etage a l'autre
