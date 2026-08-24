@@ -1777,7 +1777,69 @@ ERREUR_seuil_etage2_au_dela_de_la_reference_DAC_baisser_SAFETY_ISHUNT_THRESHOLD_
 // vitesse demandee, ce limiteur ne fait que la borner.
 #define CTRL_DUTY_SLEW_MAX_COUNTS   4U
 
-#define CTRL_GAIN_DIV_SHIFT_S1    1U   // etage 1 : gain divise par deux
+// ---- RELEVEMENT DU GAIN DE L'ETAGE 1, PALIER 1 (24/08/2026) -----------
+// 1 -> 0, soit un FACTEUR DEUX sur le gain de boucle de l'etage 1 seul.
+//
+// POURQUOI CE BOUTON-CI. k_gain_div_shift divise P ET I ensemble : il
+// deplace le gain de boucle sans deplacer le zero du PI. C'est un gain pur.
+// CTRL_KP_SHIFT, lui, ne toucherait que P et decalerait le zero -- deux
+// effets a la fois, indemelables a la mesure. Et celui-ci est PAR ETAGE :
+// l'etage 2, qui va bien, ne bouge pas.
+//
+// LA MESURE QUI JUSTIFIE LE PALIER. A la fermeture de HV_EN, V1 creuse de
+// 12 V (15 %) et met 2,5 s a revenir. La rampe seule refermerait ces 12 V en
+// 0,25 s : c'est donc bien la boucle qui traine, ni la rampe ni le limiteur.
+// Objectif : meme creux referme en 200 ms, sans depassement.
+//
+// MARGE. La coupure passe de ~19 a ~38 Hz. Les poles voisins sont bien plus
+// haut -- le RC 10k+100nF devant l'ADC a 160 Hz en tete -- donc ce palier-ci
+// ne doit rien couter en phase. C'est le suivant qui commencera a mordre
+// dessus, et il faudra alors traiter ce RC en meme temps.
+//
+// RESULTAT DU PALIER 1, mesure a 500 V sous 25 kOhms :
+//   creux           12 V   -> 7,4 V
+//   temps de retour 2,5 s  -> 800 ms sur la partie rapide
+//
+// ON S'ARRETE LA. Un palier 2 n'a pas d'objet, pour une raison que la mesure
+// a etablie et qu'il ne faut pas rouvrir par inadvertance -- voir ci-dessous.
+//
+// ---- LA QUEUE LENTE DE V1 : CONNUE, INOFFENSIVE, NON CORRIGEE ---------
+// Apres le retour rapide, V1 continue de monter de 4,6 V sur 14 s (31,8 mV/s
+// a la sonde x10). Capture deux voies du 24/08, V1 et VOUT simultanes :
+//
+//   VOUT : etabli en ~1 s, puis Delta = -10 mV sur 14,5 s -- PLAT.
+//   V1   : Delta = +461 mV sur la meme fenetre.
+//
+// CE N'EST DONC PAS LA CASCADE. L'etage 2 rejette integralement la
+// perturbation, et c'est tout ce qu'on lui demande : la qualite de VOUT est
+// intacte pendant que V1 derive.
+//
+// CE N'EST PAS NON PLUS L'INTEGRATEUR. Il faut accumuler 1 << (KI_SHIFT +
+// gain_div) = 16384 counts d'erreur pour bouger le duty d'un count, donc a
+// 20,4 kHz la vitesse de V1 vaut 1,16 x e volts par seconde pour une erreur
+// de e counts ADC. Les 0,32 V/s observes donnent e = 0,28 count -- moins
+// d'un LSB -- alors que les 4,6 V parcourus en font 200. Une boucle qui
+// VERRAIT 200 counts les refermerait en une seconde. L'erreur lue est donc
+// quasi nulle pendant que le reel parcourt 4,6 V : c'est la MESURE qui se
+// deplace, avec une constante de 14 s.
+//
+// Piste non confirmee : auto-echauffement du pont. Les deux 47 k dissipent
+// 32 mW chacun contre 2,3 mW pour le 3,3 k du bas, donc ils chauffent seuls
+// et le rapport se deplace. Le signe et la duree collent ; l'AMPLITUDE, non
+// -- 5,7 % demanderaient un coefficient de temperature invraisemblable pour
+// des resistances ordinaires. Inexplique, et assume comme tel.
+//
+// DECISION (24/08) : on ne cherche pas plus loin. VOUT est preserve, c'est
+// le seul critere qui compte, et la grandeur qui derive est intermediaire.
+//
+// LA SEULE RESERVE, a verifier UNE FOIS a la puissance visee : la protection
+// V1 surveille la valeur LUE, qui reste a 75 pendant que le reel monte. Elle
+// est donc aveugle a cette derive-la. Ca plafonne aujourd'hui vers 84 V
+// reels sur un condensateur de 100 V, mais la dissipation du pont croit avec
+// la puissance. Laisser tourner cinq minutes en charge a pleine puissance et
+// relever V1 au multimetre : sous 90 V le sujet est clos, au-dela il suffit
+// de baisser la consigne.
+#define CTRL_GAIN_DIV_SHIFT_S1    0U   // palier 1 : gain nominal (etait 1U)
 #define CTRL_GAIN_DIV_SHIFT_S2    0U   // etage 2 : gain d'origine
 
 // ---- Resultat mesure avec Kp = 1, le 20/08/2026 ----------------------
