@@ -88,9 +88,67 @@
 // peut pas sortir moins que son entree, la conduction etait donc purement
 // L -> diode -> charge, sans ambiguite d'instant d'echantillonnage.
 //
-// A CONFIRMER : ces deux points viennent de l'affichage du serveur, arrondi a
-// une decimale. Le rapport est solide, la troisieme decimale ne l'est pas.
-#define MEAS_V1_GAIN_V_PER_V     29.27f   // broche 16, [V0.2]
+// ---- REETALONNE LE 24/08/2026, SUR VALEUR BRUTE ---------------------
+// La reserve ci-dessus est levee. Cinq points, tension INJECTEE depuis une
+// alimentation de laboratoire et valeur BRUTE lue au debogueur -- la
+// methode que le depot prescrit, jamais appliquee a cette voie jusqu'ici.
+//
+//   V injectee (V) :   0     5     10    20    29,2
+//   ADCRESULT1     :   0    209   421   846   1250
+//
+// Moindres carres :   raw = 42,79 x V - 4,2
+//
+//   -> gain  = 4096 / (3,3 x 42,79) = 29,00
+//   -> offset = -4 counts, soit -0,1 V : NUL a la resolution pres, et le
+//      point a 0 V donne exactement 0.
+//
+// C'EST DONC UNE DROITE PAR L'ORIGINE. Pas de loi a deux termes, pas
+// d'element parasite en serie dans le pont -- contrairement a la voie VOUT,
+// ou LED1 imposait un offset de 1,70 V.
+//
+// L'ecart avec l'ancienne valeur n'est que de 0,9 %. L'hypothese d'un gain
+// faux de 7 %, formulee le 24/08 pour expliquer que le multimetre lise 81 V
+// quand la carte annonce 75, EST DONC INFIRMEE : la chaine est juste.
+// L'ecart n'apparait que SOUS DECOUPAGE, c'est donc un probleme d'INSTANT
+// D'ECHANTILLONNAGE -- l'ADC preleve un point unique du cycle pendant que
+// multimetre et scope moyennent. Voir le pave de pwm.c sur ADC_TRIG_LEAD.
+//
+// CONDITION IMPERATIVE DE LA MESURE : la carte de puissance doit etre
+// ALIMENTEE. Un premier jeu de points, pris alimentation debranchee, etait
+// entierement faux -- les suiveurs sans alimentation font flotter toutes
+// les voies, V1 lisait 12,6 V a zero volt, et injecter sur V1 deplacait
+// AUSSI Vin et Vout par des chemins parasites.
+//
+// RESERVE : l'etalonnage s'arrete a 29,2 V et l'exploitation se fait a
+// 75-85 V. On extrapole encore, mais l'offset nul et la linearite sur cinq
+// points rendent cette extrapolation bien plus solide que les trois points
+// de 23 a 46 V qui avaient produit la valeur precedente.
+// ---- CHAINE DE MESURE V1 : NE RIEN AJOUTER AU POINT MILIEU (24/08/2026) ----
+// Le point milieu du pont V1 (47k + 47k / 3,3k, Zs = 3,19 kOhms) n'est PAS un
+// simple point de mesure : c'est le retour de contre-reaction de l'etage 1.
+// Ce qui fausse la lecture fausse la CONSIGNE.
+//
+// Demonstration, faite a la dure :
+//   - clamp D5 pose sur le point milieu     -> offset 6 %  (lecture BASSE)
+//   - clamp deplace en sortie du suiveur     -> offset 2 %
+//   - + 1 nF ajoute au point milieu          -> offset ~5 %, et overI1 a 480 V
+//   - 1 nF retire                            -> offset 2 %, la montee passe
+//
+// MECANISME. Lire 71,2 V quand il y en a 75,6 ne degrade pas l'affichage : la
+// boucle vise 75 V LUS, donc elle regule vers ~80 V reels. A 480 V il n'y a
+// plus la marge pour absorber 5 % de surtension et le courant d'entree part.
+//
+// Le pole ajoute (3,2 us, soit 50 kHz) n'y est pour rien -- deux ordres de
+// grandeur au-dessus de la coupure de 19 Hz de la boucle. C'est bien la
+// JUSTESSE qui compte ici, pas la dynamique.
+//
+// REGLE : tout filtrage de V1 se met APRES le suiveur, jamais avant. Le RC
+// 10k + 100 nF existant devant l'ADC est a la bonne place.
+//
+// RESERVE POUR PLUS TARD : ce RC fait un pole a 1 ms (160 Hz). Sans effet sur
+// une boucle a 19 Hz, il deviendra DOMINANT des qu'on relevera Kp pour viser
+// 300 Hz. A traiter avec le relevement de Kp, pas avant.
+#define MEAS_V1_GAIN_V_PER_V     29.00f   // broche 16, [V0.2] brut, 5 points
 
 // [V0.1] NON VERIFIEES SUR V0.2.
 // VIN : ecart d'environ 1 % constate sur V0.2 (19,93 V lus 19,7 ; 24,18 V lus
@@ -1080,6 +1138,24 @@ ERREUR_seuil_etage2_au_dela_de_la_reference_DAC_baisser_SAFETY_ISHUNT_THRESHOLD_
 // depart, celui qui a produit le tout premier overVout.
 #define HV_OFF_INHIBIT_SEQ     4000U
 
+// ---- SEQUENCEMENT DE LA FERMETURE (24/08/2026) ----------------------
+// Fermer HV_EN applique la charge EN UN PAS. La sortie, tenue a 500 V a
+// vide, s'effondre d'un coup ; la boucle pousse, l'etage 2 reclame a
+// l'etage 1, et le courant d'entree fait une pointe -- defaut overI1
+// constate a chaque fermeture.
+//
+// C'est le miroir exact de l'ouverture, et on ne l'avait jamais traite.
+//
+// PARADE. On coaste les deux etages AVANT de fermer, puis on ferme : la
+// charge vide alors C1 elle-meme, sans que rien ne pousse contre elle.
+// Quand le coast se releve, la rampe -- collee a la tension mesuree -- fait
+// remonter la sortie progressivement DANS la charge. Plus d'echelon.
+//
+// 100 ms, soit 6670 sequences ADC. C1 fait 2 uF et la charge 23 kOhms, donc
+// tau = 46 ms : en 100 ms la sortie tombe a ~11 % et il n'y a plus rien a
+// delester. Dans les 100 a 200 ms tolerees sur cette commande.
+#define HV_ON_COAST_SEQ        6670U
+
 // ---- VITESSE D'EXTINCTION DE L'ETAGE 2 ------------------------------
 // Pas de descente du duty, en Q8 counts, applique a chaque tick de
 // regulation pendant le coast.
@@ -1241,12 +1317,31 @@ ERREUR_seuil_etage2_au_dela_de_la_reference_DAC_baisser_SAFETY_ISHUNT_THRESHOLD_
 // le balayage ne peut pas sortir de la plage utile ni eteindre la sequence
 // ADC. Si un reglage fait franchement osciller, ca coupe -- et c'est en soi
 // le resultat cherche.
-// Remis a 0 le 23/08/2026, essai fait : le resultat est fige dans
-// ADC_TRIG_LEAD_COUNTS ci-dessus. Repasser a 1 pour rebalayer a un autre
-// point de fonctionnement -- la valeur retenue n'y est pas transposable.
+// Remis a 0 le 24/08 : le test 2 a livre son resultat.
+//
+//   V1   : ecart CONSTANT, 72,6 a 72,8 V sur quatre paliers
+//          -> pas un instant d'echantillonnage. Cause trouvee ailleurs :
+//             D5 redressait le couplage sur le noeud du pont, a 3,19 kOhms
+//             d'impedance. Clamp deplace en sortie de suiveur le 24/08,
+//             comme D4 l'avait ete sur la voie VOUT le 20/08.
+//   VOUT : ecart VARIABLE, minimum a +15 counts (4,0 V -> 1,5 V).
+//          NON ADOPTE : mesure avec la chaine V1 encore fautive, donc a
+//          refaire sur un systeme sain avant d'etre fige.
+//
+// Au-dela de +45 counts la regulation se destabilise et coupe, en overI1
+// ou en overVout selon la campagne -- c'est la plage exploitable.
 #define ADC_TRIG_SWEEP            0
+// Balayage UNIDIRECTIONNEL depuis le nominal vers un declenchement plus
+// precoce : 7 paliers de 15 counts couvrent nominal a nominal+90.
+//
+// A D = 0,733 le declenchement passe ainsi de 182 a 92, la conduction
+// commencant au count 80 -- toute la plage reste DANS la conduction, ce qui
+// n'aurait pas ete le cas en allant plus loin.
+//
+// Le sens negatif est exclu : il rapproche la sequence du front de blocage
+// et coupe immediatement (essaye le 24/08).
 #define ADC_TRIG_SWEEP_STEPS      7
-#define ADC_TRIG_SWEEP_STEP       10
+#define ADC_TRIG_SWEEP_STEP       15
 #define ADC_TRIG_SWEEP_DWELL_TICKS 1000U  // 10 s a 10 ms
 
 // INSTRUMENTATION TEMPORAIRE -- voir l'en-tete d'adc.c pour le detail et

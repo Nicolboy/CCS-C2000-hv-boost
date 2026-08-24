@@ -140,6 +140,10 @@ static uint32_t s_hv_off_seq = 0U;
 // Dernier etat COMMANDE a HV_EN. bsp_gpio n'offre pas de relecture, et il
 // faut un front pour declencher le sequencement.
 static bool s_hv_on = false;
+// Fermeture HT en cours : les deux etages sont coastes pendant que la charge
+// vide C1 elle-meme. Voir HV_ON_COAST_SEQ dans calib.h.
+static bool s_hv_on_pending = false;
+static uint32_t s_hv_on_seq = 0U;
 
 static void enable_power_path(void)
 {
@@ -275,6 +279,7 @@ static void enter_safe_state(void)
     // n'y a plus de delestage possible de toute facon.
     s_hv_on = false;
     s_hv_off_pending = false;
+    s_hv_on_pending = false;
     control_coast(false);
 
     // Decharge active. Elle vient APRES la coupure de HV_EN : la charge est
@@ -533,16 +538,50 @@ void main(void)
 
                 if (hv_want)
                 {
-                    // Demande active : on ferme, et un sequencement en cours
-                    // est abandonne.
+                    // Demande active : un sequencement de COUPURE en cours est
+                    // abandonne.
                     s_hv_off_pending = false;
-                    control_coast(false);
-                    hv_enable_set(true);
-                    s_hv_on = true;
+
+                    if (!s_hv_on)
+                    {
+                        // SEQUENCEMENT DE LA FERMETURE. Voir HV_ON_COAST_SEQ.
+                        //
+                        // Fermer sur une sortie tenue a 500 V a vide applique
+                        // la charge en UN PAS. La sortie s'effondre, la boucle
+                        // pousse, l'etage 2 reclame a l'etage 1 et le courant
+                        // d'entree fait une pointe : defaut overI1 a chaque
+                        // fermeture.
+                        //
+                        // On coaste donc AVANT de fermer. La charge vide alors
+                        // C1 sans que rien ne pousse contre elle, et quand le
+                        // coast se releve la rampe -- collee a la tension
+                        // mesuree par coast_stage() -- fait remonter la sortie
+                        // progressivement DANS la charge.
+                        //
+                        // Miroir exact de la coupure, qu'on avait sequencee
+                        // sans jamais traiter le cas symetrique.
+                        control_coast(true);
+                        hv_enable_set(true);
+                        s_hv_on = true;
+                        s_hv_on_seq = adc_get_sequence_count();
+                        s_hv_on_pending = true;
+                    }
+                    else if (s_hv_on_pending)
+                    {
+                        if ((uint32_t)(adc_get_sequence_count() - s_hv_on_seq)
+                            >= HV_ON_COAST_SEQ)
+                        {
+                            control_coast(false);
+                            s_hv_on_pending = false;
+                        }
+                    }
                 }
                 else if (s_hv_on)
                 {
                     // On ne veut plus de HT alors que HV_EN est encore ferme.
+                    // Une fermeture encore en cours devient sans objet.
+                    s_hv_on_pending = false;
+
                     if (!s_hv_off_pending)
                     {
                         s_hv_off_pending = true;
@@ -682,15 +721,22 @@ static void adc_trig_sweep_tick(bool running)
         // Reset a l'arret : chaque essai repart du meme point, sinon deux
         // montees successives ne seraient pas comparables.
         dwell = 0U;
-        g_adc_trig_sweep_step = -(ADC_TRIG_SWEEP_STEPS / 2);
-        g_adc_trig_lead = (int16_t)(ADC_TRIG_LEAD_COUNTS
-                                    + g_adc_trig_sweep_step * ADC_TRIG_SWEEP_STEP);
+        // DEPART A ZERO, PAS EN NEGATIF. Un lead negatif retarde le
+        // declenchement : a D = 0,733 la sequence partirait au count 243 et
+        // ses 132 counts de voies rapides deborderaient AU-DELA du passage a
+        // zero, donc a travers le front de blocage. Essaye le 24/08 avec un
+        // depart a -60 : defaut overI1 immediat, conforme a ce que pwm.c
+        // documente sur la variable regulee tombant sur le front
+        // d'extinction. On ne balaie donc que vers un declenchement plus
+        // PRECOCE, qui s'eloigne du front.
+        g_adc_trig_sweep_step = 0;
+        g_adc_trig_lead = (int16_t)ADC_TRIG_LEAD_COUNTS;
         return;
     }
 
     // Fige a la derniere valeur au lieu de reboucler : un releve tardif
     // reste interpretable.
-    if (g_adc_trig_sweep_step >= (ADC_TRIG_SWEEP_STEPS / 2))
+    if (g_adc_trig_sweep_step >= (ADC_TRIG_SWEEP_STEPS - 1))
     {
         return;
     }
