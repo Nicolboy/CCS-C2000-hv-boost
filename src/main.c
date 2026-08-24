@@ -671,7 +671,22 @@ interrupt void cpu_timer0_isr(void)
 // fait s'il reste du temps".
 interrupt void cpu_timer1_isr(void)
 {
+#if CTRL_TIMING_PROBE
+    // TOUT PREMIER acte, et dernier avant la sortie : la largeur de
+    // l'impulsion EST la duree de l'ISR, latence d'entree exclue. Son
+    // rapport cyclique EST la charge CPU de la regulation. Voir calib.h.
+    //
+    // GPIO33 = sortie LED ROUGE, choisie pour son accessibilite au scope.
+    // led_set() refuse d'ecrire LED_RED tant que cette sonde est active,
+    // sinon status_led_tick() la repasserait a 100 Hz par-dessus.
+    GpioDataRegs.GPBSET.bit.GPIO33 = 1;
+#endif
+
     control_tick();
 
     CpuTimer1Regs.TCR.bit.TIF = 1;
+
+#if CTRL_TIMING_PROBE
+    GpioDataRegs.GPBCLEAR.bit.GPIO33 = 1;
+#endif
 }

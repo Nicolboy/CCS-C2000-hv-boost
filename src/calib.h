@@ -784,7 +784,35 @@
 //
 // A revoir si la puissance de travail augmente : le plafond utile est
 // d'environ 5 A, au-dela l'ampli sature avant le comparateur.
-#define SAFETY_ISHUNT_THRESHOLD_A   4.0f    // [V0.2] crete, cf. ci-dessus
+// ---- SCINDE PAR ETAGE LE 23/08/2026 ---------------------------------
+// Le seuil unique en AMPERES etait la derniere chose partagee : les gains
+// etaient deja distincts (MEAS_I1/I2_GAIN_V_PER_A), les shunts aussi
+// (0,01 Ohm sur I1, 0,02 sur I2), volontairement -- adapter la resistance
+// au courant de chaque etage donne le meilleur signal des deux cotes.
+// Imposer un seuil commun revenait a annuler ce dimensionnement.
+//
+// DEUX PROBLEMES QUE LA VALEUR UNIQUE DE 4,0 A CREAIT :
+//
+// 1. ETAGE 1 SOUS-PROTEGE EN PRATIQUE, ET SURTOUT TROP TOT. Son courant
+//    crete a 50 W vaut Iin + dI/2 = 3,13 + 0,78 = 3,91 A avec les 47 uH
+//    de la SER2211-473. Contre un seuil a 4,0 A, cela fait 2 % de marge :
+//    la carte coupait avant d'atteindre la pleine puissance.
+//
+// 2. ETAGE 2 SUR-PROTEGE. Son crete a 50 W ne vaut que 1,5 A. Un seuil a
+//    4,0 A le laisse monter a 2,7 fois son courant nominal avant d'agir,
+//    alors que sa chaine permet largement mieux.
+//
+// VALEURS RETENUES, chacune calee sur le crete reel de son etage :
+//   etage 1 : 5,0 A  ->  1,28x le crete de 3,91 A
+//   etage 2 : 3,0 A  ->  2,0x  le crete de 1,50 A
+//
+// PLAFONDS A NE PAS DEPASSER, imposes par la reference du DAC :
+//   etage 1 : (3,3 - 0,031) / 0,58  = 5,64 A
+//   etage 2 :  3,3          / 0,637 = 5,18 A
+// et, en amont, l'ampli de l'etage 1 sature vers 5 A -- c'est lui qui
+// borne reellement, pas le DAC.
+#define SAFETY_ISHUNT_THRESHOLD_S1_A  5.0f   // [V0.2] crete, etage 1
+#define SAFETY_ISHUNT_THRESHOLD_S2_A  3.0f   // [V0.2] crete, etage 2
 #define SAFETY_DAC_VREF_V           3.3f
 
 // Qualification du comparateur : nombre d'echantillons SYSCLK consecutifs
@@ -817,12 +845,45 @@
                     : ((v_) / SAFETY_DAC_VREF_V * 1023.0f + 0.5f)))
 
 // Seuil ramene a la sortie de l'ampli : Vadc = offset + I * gain.
-#define SAFETY_DAC_CODE_STAGE1                                            \
-    SAFETY_DAC_CODE_FROM_V(MEAS_I1_OFFSET_V                               \
-                           + SAFETY_ISHUNT_THRESHOLD_A * MEAS_I1_GAIN_V_PER_A)
-#define SAFETY_DAC_CODE_STAGE2                                            \
-    SAFETY_DAC_CODE_FROM_V(MEAS_I2_OFFSET_V                               \
-                           + SAFETY_ISHUNT_THRESHOLD_A * MEAS_I2_GAIN_V_PER_A)
+#define SAFETY_DAC_VOLTS_STAGE1                                           \
+    (MEAS_I1_OFFSET_V + SAFETY_ISHUNT_THRESHOLD_S1_A * MEAS_I1_GAIN_V_PER_A)
+#define SAFETY_DAC_VOLTS_STAGE2                                           \
+    (MEAS_I2_OFFSET_V + SAFETY_ISHUNT_THRESHOLD_S2_A * MEAS_I2_GAIN_V_PER_A)
+
+#define SAFETY_DAC_CODE_STAGE1  SAFETY_DAC_CODE_FROM_V(SAFETY_DAC_VOLTS_STAGE1)
+#define SAFETY_DAC_CODE_STAGE2  SAFETY_DAC_CODE_FROM_V(SAFETY_DAC_VOLTS_STAGE2)
+
+// ---- GARDE-FOU CONTRE L'ECRETAGE SILENCIEUX -------------------------
+// C'EST LE POINT ESSENTIEL DE CETTE SECTION, pas les valeurs.
+//
+// SAFETY_DAC_CODE_FROM_V ECRETE a 1023 au lieu de tronquer -- ce qui est
+// deja un progres, la troncature ayant un jour place un seuil de 3,67 V a
+// 0,45 A. Mais l'ecretage reste SILENCIEUX : la protection se retrouve
+// posee a 3,3 V, donc a un courant plus eleve que demande, et RIEN ne le
+// signale. C'est arrive avec le seuil a 7,0 A, ou l'etage 2 protegeait en
+// realite vers 4,9 A pendant que la constante annoncait 7,0.
+//
+// Ces deux lignes rendent le cas IMPOSSIBLE A COMPILER. Un seuil, un gain
+// ou un offset qui menerait au-dela de la reference du DAC arrete la
+// construction au lieu de produire un binaire dont la protection ment.
+//
+// Mecanisme : un tableau de taille negative est invalide. La condition est
+// evaluee a la compilation par repliement de constantes -- le preprocesseur
+// ne sait PAS manipuler de flottants, un #if ne pourrait donc pas le faire.
+//
+// VERIFIE LE 23/08/2026 : en portant temporairement le seuil de l'etage 1 a
+// 7,0 A, la construction s'arrete bien, sur les huit unites de compilation.
+// Un garde-fou qui ne se declenche jamais est pire que pas de garde-fou.
+//
+// Le compilateur dira seulement "the size of an array must be greater than
+// zero" -- d'ou le nom explicite du type juste en dessous, qui est le seul
+// endroit ou la vraie raison apparaitra.
+typedef char
+ERREUR_seuil_etage1_au_dela_de_la_reference_DAC_baisser_SAFETY_ISHUNT_THRESHOLD_S1_A[
+    (SAFETY_DAC_VOLTS_STAGE1 < SAFETY_DAC_VREF_V) ? 1 : -1];
+typedef char
+ERREUR_seuil_etage2_au_dela_de_la_reference_DAC_baisser_SAFETY_ISHUNT_THRESHOLD_S2_A[
+    (SAFETY_DAC_VOLTS_STAGE2 < SAFETY_DAC_VREF_V) ? 1 : -1];
 
 // ---- Fenetre d'aveuglement du comparateur (blanking) ----------------
 //
@@ -1192,6 +1253,46 @@
 // un cycle d'alimentation complet.
 #define CTRL_VIN_UV_COUNTS        5U
 
+// ---- ANTI-REBOND DE LA SURTENSION DE SORTIE (23/08/2026) ------------
+// Constat : un defaut FAULT_OVERVOLTAGE_VOUT tombe A CHAQUE ARRET NORMAL,
+// alors que la tension reelle ne monte pas.
+//
+// CE N'EST PAS LA TENSION, C'EST LA DETECTION. L'energie stockee ne peut
+// pas expliquer une surtension : L2 a 0,75 A crete represente 124 uJ, soit
+// 0,12 V sur les 2 uF de C1 a 503 V. En revanche la sequence d'arret
+// produit le plus gros dV/dt de la carte -- HV_EN qui isole la charge,
+// puis le MOSFET de decharge qui attaque un noeud a 500 V -- et le test
+// portait sur UN SEUL echantillon ADC, sans aucun anti-rebond. Le meme
+// couplage avait deja fabrique 480 mV de continu sur cette voie, soit
+// 130 V d'erreur (hardware.md, episode de la diode D4).
+//
+// COUT CHIFFRE. Dans le pire cas reel, l'etage 2 debite 0,75 A dans 2 uF,
+// soit 0,375 V/us. Trois sequences ADC font 45 us, donc au pire 17 V de
+// depassement supplementaire : la protection agirait a 537 V au lieu de
+// 520. Le WIMA C1 tient 800 V a 70 degres, la marge reste large.
+//
+// POURQUOI CA COMPTE PLUS QUE LE CONFORT. Un defaut VERROUILLANT qui tombe
+// a chaque arret normal oblige a un cycle d'alimentation entre deux essais
+// -- et surtout il APPREND A IGNORER LE DEFAUT. C'est le pire effet
+// possible sur une protection, et c'est un risque de securite en soi.
+//
+// LE VERROUILLAGE N'EST PAS TOUCHE, ni le seuil. Seul le nombre
+// d'echantillons consecutifs exiges change.
+#define CTRL_VOUT_OV_COUNTS       3U
+
+// Meme traitement sur V1, et il coute encore moins cher. Le noeud V1 porte
+// ~420 uF (C6 plus l'ajout du 23/08) contre 2 uF sur la sortie : un vrai
+// emballement de l'etage 1 a 2 A crete n'y fait que 0,005 V/us. Cinq
+// sequences ADC, soit 75 us, ne laissent donc passer que 0,4 V de
+// depassement supplementaire -- contre 17 V du cote VOUT.
+//
+// PISTE SUR UN DEFAUT JAMAIS ELUCIDE. Le overV1 du 23/08 coupait a 410 V
+// apres deux minutes, et les trois causes envisagees sont restees
+// ouvertes. L'une d'elles etait "derive de la chaine de mesure" : un
+// echantillon aberrant unique produirait exactement ce tableau. Si le
+// defaut ne revient plus, c'etait ca.
+#define CTRL_V1_OV_COUNTS         5U
+
 // ---- REARMEMENT AUTOMATIQUE, SOUS-TENSION D'ENTREE UNIQUEMENT --------
 //
 // A 1, un defaut FAULT_UNDERVOLTAGE_VIN se deverrouille tout seul quand
@@ -1301,6 +1402,69 @@
 // sur l'etage 2. A caracteriser avant toute montee a 500 V.
 #define CTRL_KP_DIV_SHIFT         1U   // Kp effectif = 0,5
 
+// ---- GAIN PAR ETAGE (23/08/2026) ------------------------------------
+// Division SUPPLEMENTAIRE appliquee a P ET I ensemble, propre a chaque
+// etage. Appliquer le meme facteur aux deux termes laisse le zero du PI
+// en place : seul le GAIN DE BOUCLE baisse, la forme de la reponse est
+// conservee.
+//
+// POURQUOI, ET POURQUOI SUR L'ETAGE 2 SEULEMENT.
+//
+// Mesure du 23/08 : l'etage 1 SEUL tient 50 W sur charge resistive. En
+// cascade, l'ensemble s'emballe des 10 W. Cinq fois moins. L'instabilite
+// n'est donc PAS dans la boucle de l'etage 1.
+//
+// Mecanisme : un convertisseur regule est une charge a PUISSANCE
+// CONSTANTE. Si V1 baisse, l'etage 2 tire PLUS de courant pour tenir sa
+// sortie. Vu de la sortie de l'etage 1, il presente donc une resistance
+// incrementale NEGATIVE de -V1^2/P. C'est l'instabilite classique des
+// convertisseurs en cascade (critere de Middlebrook) : chaque etage est
+// stable seul, c'est leur interaction qui oscille.
+//
+// Or l'etage 2 ne se comporte en resistance negative que DANS SA PROPRE
+// BANDE PASSANTE ; au-dela il redevient une impedance ordinaire. Baisser
+// son gain retrecit donc la plage de frequences ou le conflit existe.
+//
+// GAIN ET NON CADENCE. Decimer la regulation de l'etage 2 aurait le meme
+// effet sur sa bande passante, mais en ajoutant du RETARD DE PHASE dans sa
+// propre boucle -- ce qui peut la destabiliser au lieu de l'assagir. Un
+// changement de gain n'ajoute aucune phase.
+//
+// Verification croisee, meme facteur : le passage de V1 de 50 a 75 V avait
+// deja augmente |R| de (75/50)^2 = 2,25x, et le plafond etait monte de
+// 410-420 V a 430-440 V. La montee de V1 a 200 V donnerait 7,1x.
+// ---- CORRIGE LE 23/08/2026 AU SOIR, PAR LA MESURE -------------------
+// V1 sonde au scope EN MEME TEMPS que I1 : V1 ne bouge que de 137 mV
+// (AC RMS) pendant que I1 oscille de 0,41 A RMS a 4 kHz.
+//
+// "V1 ne bouge pas" EST TROMPEUR, et c'est le piege de cette mesure. La
+// boucle ne voit pas des pourcentages, elle voit des counts :
+//
+//   137 mV x 42,4 raw/V         = 5,8 counts d'erreur
+//   x Kp 0,5                    = 2,9 counts de duty, soit 0,97 %
+//   ΔI = Vin.ΔD.t/L sur 125 us  = 0,52 A
+//
+// ce qui est exactement l'amplitude observee sur I1. V1 parait propre
+// parce que le condensateur absorbe l'oscillation -- 300 uF a 4 kHz font
+// 0,13 Ohm -- mais les 137 mV qui subsistent entretiennent la boucle.
+//
+// LES 4 kHz NE SONT PAS UNE RESONANCE. Aucune n'y correspondait, et pour
+// cause : c'est la FREQUENCE DE COUPURE de la boucle. Le retard
+// d'echantillonnage a 20,4 kHz vaut ~1,5 periode, soit 73 us, ce qui donne
+// 180 degres vers 6,8 kHz ; avec le retard du plant on croise vers 4 kHz.
+// Cycle limite de regulation, pas phenomene physique.
+//
+// L'ETAGE 2 EST HORS DE CAUSE : le diviser par deux avait AGGRAVE
+// l'oscillation (AC RMS de I1 passee de 89 a 438 mV). Il est remis a 0.
+//
+// A NOTER pour la suite : l'etage 1 tient 50 W SEUL sur charge resistive.
+// Ce n'est donc pas sa boucle qui est mauvaise dans l'absolu -- c'est son
+// gain qui est trop eleve POUR CE POINT DE FONCTIONNEMENT, ou son entree
+// V1 trop bruitee. Le bouclage decrit dans pwm.c (bruit de commutation sur
+// V1 -> l'integrateur corrige -> le duty bouge) reste le suspect de fond.
+#define CTRL_GAIN_DIV_SHIFT_S1    1U   // etage 1 : gain divise par deux
+#define CTRL_GAIN_DIV_SHIFT_S2    0U   // etage 2 : rendu a son gain d'origine
+
 // ---- Resultat mesure avec Kp = 1, le 20/08/2026 ----------------------
 //
 // Meme delestage qu'au releve ci-dessus :
@@ -1338,7 +1502,10 @@
 //
 // s_accum_max suit automatiquement : control.c le calcule en
 // duty_max << CTRL_KI_SHIFT.
-#define CTRL_KI_SHIFT            13U   // Ki = 1/8192 par pas
+// 13 -> 14 le 23/08/2026 avec le passage de la cadence a 49 us. Meme
+// raison qu'a l'etape precedente : la constante est PAR PAS, la diviser
+// par deux conserve la constante de temps integrale en secondes.
+#define CTRL_KI_SHIFT            14U   // Ki = 1/16384 par pas
 
 // ---- Terme derive : DESACTIVE ----------------------------------------
 //
@@ -1434,21 +1601,69 @@
 // BUDGET CPU : Timer 1 passe de 5,1 a 10,2 kHz. Il est en INT13, preempte
 // par l'ISR ADC (INT1), donc l'integrite des mesures n'est pas en jeu ;
 // seule la charge totale l'est. A MESURER avec ADC_TIMING_PROBE.
-#define CTRL_TICK_PERIOD_US       98UL
+// ---- REDIVISE PAR DEUX LE 23/08/2026, 98 -> 49 us -------------------
+// La premiere division (195 -> 98) a fait SUIVRE la sous-harmonique de
+// 2,3 a ~5 kHz au lieu de la supprimer ; c'est Kp/2 qui l'a matee. Cette
+// seconde division vise a RACHETER ce Kp : la marge gagnee par la cadence
+// doit permettre de remonter CTRL_KP_DIV_SHIFT a 0, donc de restaurer la
+// reponse au delestage -- aujourd'hui le risque principal, avec 20 V de
+// marge sous la coupure a 520 V.
+//
+// UN CHANGEMENT A LA FOIS. Passer la cadence ET restaurer Kp dans le meme
+// essai rendrait le resultat inexploitable, comme l'ont montre V1 et
+// l'inversion AQ changes ensemble. Verifier la stabilite a 49 us D'ABORD,
+// remonter Kp ENSUITE.
+//
+// COMPENSATIONS OBLIGATOIRES, de nouveau : CTRL_KI_SHIFT 13 -> 14 et les
+// deux CTRL_RAMP_* divises par deux. Ces constantes sont PAR PAS.
+//
+// BUDGET CPU, A MESURER AVANT DE MONTER EN TENSION. Timer 1 passe a
+// 20,4 kHz. Voir CTRL_TIMING_PROBE ci-dessous : rien ne permettait
+// jusqu'ici de chronometrer control_tick(), on ne savait que "plus de
+// 9 us" du temps ou elle vivait dans l'ISR ADC.
+#define CTRL_TICK_PERIOD_US       49UL
+
+// ---- SONDE DE DUREE DE control_tick() -------------------------------
+// BANC UNIQUEMENT. Met GPIO33 (broche 36, sortie LED ROUGE) haut a
+// l'entree de l'ISR du CPU Timer 1 et bas a la sortie : LA LARGEUR DE
+// L'IMPULSION EST LA DUREE DE L'ISR, et son rapport cyclique EST la charge
+// CPU de la regulation.
+//
+// GPIO33 et NON GPIO32 : GPIO32 est HV_EN, la commande de l'optocoupleur
+// VOM1271, seul organe qui isole la charge haute tension -- c'est ce
+// qu'interdit deja le #error d'ADC_TIMING_PROBE. La sortie LED, elle, ne
+// pilote rien de critique, donc CETTE sonde-ci peut tourner AVEC la haute
+// tension. Elle est aussi la plus accessible au scope.
+//
+// LA LED ROUGE EST CONFISQUEE pendant la mesure : led_set() refuse
+// d'ecrire LED_RED tant que ce symbole vaut 1, sinon status_led_tick()
+// ecraserait l'impulsion a 100 Hz. Plus aucun motif de defaut n'est donc
+// visible ; la telemetrie reste le seul indicateur d'etat.
+//
+// Lecture au scope : impulsion large = duree de l'ISR ; periode = 49 us.
+// Au-dela de ~35 us de largeur il ne reste plus rien a la boucle
+// principale, qui porte l'UART et la telemetrie.
+// Mesure faite le 23/08/2026 : PosDuty = 21 % a RUN=0 et 32,9 % a RUN=1,
+// soit 16,1 us pour control_tick(). Avec les ~33 % de l'ISR ADC, la charge
+// totale des interruptions vaut 66 % et il reste 34 % a la boucle
+// principale. Passer a 25 us porterait le total a 97 % : EXCLU, la boucle
+// principale porte l'UART, la telemetrie et pwm_hrpwm_service().
+#define CTRL_TIMING_PROBE          0
 
 // ---- Rampe de demarrage ----------------------------------------------
 // On rampe la CONSIGNE et non le duty : la boucle reste fermee pendant
 // toute la montee. Exprimee en volts par pas de regulation.
-// 0,005 V/pas a 10,2 kHz -> ~51 V/s sur l'etage 1, la montee de 10 a 50 V
-// prend donc environ 0,8 s.
+// 0,0025 V/pas a 20,4 kHz -> ~51 V/s sur l'etage 1, la montee de 10 a 50 V
+// prend donc environ 0,8 s. La valeur en V/s est restee INCHANGEE a travers
+// les deux divisions de cadence du 23/08 : c'est le but.
 //
 // DIVISES PAR DEUX LE 23/08/2026 avec CTRL_TICK_PERIOD_US : ces constantes
 // sont exprimees PAR PAS, donc les laisser telles quelles aurait double la
 // vitesse de rampe en volts par seconde. Les valeurs en V/s sont
 // INCHANGEES, c'est le but -- on ne modifie que la cadence de la boucle,
 // pas son comportement.
-#define CTRL_RAMP_V1_V_PER_STEP     0.005f
-#define CTRL_RAMP_VOUT_V_PER_STEP   0.05f
+#define CTRL_RAMP_V1_V_PER_STEP     0.0025f
+#define CTRL_RAMP_VOUT_V_PER_STEP   0.025f
 
 // ---- Criteres de passage d'etat --------------------------------------
 // L'etage est declare etabli quand l'ecart reste sous tolerance pendant

@@ -205,6 +205,24 @@ void led_set(led_id_t led, bool on)
     bool pin_high = on;
 #endif
 
+#if CTRL_TIMING_PROBE
+    // SONDE DE TIMING ACTIVE : GPIO33 sert de marqueur pour l'ISR du CPU
+    // Timer 1, la LED rouge est donc CONFISQUEE. Le garde-fou est place ici,
+    // au point d'ecriture UNIQUE de la broche, et non chez les appelants :
+    // trois endroits ecrivent LED_RED (bsp_gpio_leds_init, status_led_init,
+    // status_led_tick a 100 Hz), et il suffirait d'en oublier un pour que
+    // les deux se battent -- l'impulsion mesuree serait alors tronquee au
+    // hasard, sans que rien ne le signale.
+    //
+    // CONSEQUENCE A ACCEPTER : plus aucun motif de defaut n'est visible sur
+    // la LED rouge pendant la mesure. La telemetrie reste le seul indicateur
+    // d'etat. C'est acceptable pour un essai de quelques minutes, pas au-dela.
+    if (led == LED_RED)
+    {
+        return;
+    }
+#endif
+
     if (led == LED_BLUE)
     {
         if (pin_high)

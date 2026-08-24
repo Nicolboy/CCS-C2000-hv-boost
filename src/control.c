@@ -79,6 +79,11 @@ static volatile fault_code_t s_fault = FAULT_NONE;
 static volatile bool s_run_requested = false;
 static volatile bool s_trip_requested = false;
 
+// Sequences ADC consecutives au-dessus des seuils de surtension. Voir
+// CTRL_VOUT_OV_COUNTS et CTRL_V1_OV_COUNTS dans calib.h.
+static uint16_t s_vout_ov_count = 0U;
+static uint16_t s_v1_ov_count = 0U;
+
 // Etage 2 actif ? A false (consigne de sortie nulle), la machine s'arrete a
 // l'etage 1 etabli et l'etage 2 reste a duty 0. Ne change JAMAIS en marche :
 // control_set_setpoints() refuse une bascule tant qu'on n'est pas a l'arret.
@@ -230,6 +235,15 @@ static int32_t shr_signed(int32_t v, uint16_t n)
 #if (CTRL_KI_SHIFT <= PWM_DUTY_FRAC_BITS)
 #error "CTRL_KI_SHIFT doit rester superieur a PWM_DUTY_FRAC_BITS : le decalage du terme integral deviendrait negatif."
 #endif
+
+// Division supplementaire du gain, PAR ETAGE. Indexee par le meme i que
+// k_stages[], s_accum[] et s_duty_max_counts[] : etage 1 en 0, etage 2 en 1.
+// const, donc le compilateur la place en flash et l'indexation ne coute
+// qu'un acces -- acceptable dans l'ISR de regulation.
+static const uint16_t k_gain_div_shift[2] = {
+    CTRL_GAIN_DIV_SHIFT_S1,
+    CTRL_GAIN_DIV_SHIFT_S2
+};
 static int32_t regulate(uint16_t i, int32_t measured_raw)
 {
     int32_t error = (s_ramp_q8[i] >> RAMP_FRAC_BITS) - measured_raw;
@@ -249,8 +263,12 @@ static int32_t regulate(uint16_t i, int32_t measured_raw)
     // L'ordre compte : on decale a gauche D'ABORD, donc la troncature de la
     // division porte sur une valeur deja mise a l'echelle Q8 et ne coute
     // pas de resolution sur l'erreur elle-meme.
+    //
+    // k_gain_div_shift[i] ajoute la division PROPRE A L'ETAGE. Elle est
+    // appliquee identiquement a P et a I plus bas, ce qui deplace le gain
+    // de boucle sans deplacer le zero du PI. Voir calib.h.
     p_term = shr_signed(shl_signed(error, CTRL_KP_SHIFT + PWM_DUTY_FRAC_BITS),
-                        CTRL_KP_DIV_SHIFT);
+                        CTRL_KP_DIV_SHIFT + k_gain_div_shift[i]);
 
     // ---- I : integral ---------------------------------------------------
     // Supprime l'erreur statique. L'accumulateur est borne aux memes limites
@@ -265,7 +283,8 @@ static int32_t regulate(uint16_t i, int32_t measured_raw)
     {
         s_accum[i] = s_accum_max[i];
     }
-    i_term = s_accum[i] >> (CTRL_KI_SHIFT - PWM_DUTY_FRAC_BITS);
+    i_term = s_accum[i]
+             >> (CTRL_KI_SHIFT - PWM_DUTY_FRAC_BITS + k_gain_div_shift[i]);
 
     // ---- D : derive ------------------------------------------------------
 #if CTRL_KD_ENABLE
@@ -514,12 +533,38 @@ void control_fast_check(void)
         s_vin_uv_count = 0U;
     }
 
+    // Anti-rebond de la surtension de SORTIE. Voir calib.h : le defaut
+    // tombait a chaque arret normal, sur le transitoire de HV_EN et de la
+    // decharge, alors que la tension reelle ne bougeait pas.
+    //
+    // Le comptage est fait ICI, inconditionnellement, et non dans la
+    // cascade de tests plus bas : place dans le "else if", il ne serait
+    // remis a zero que si aucun autre defaut n'etait vu avant, et un
+    // depassement de V1 masquerait l'historique de VOUT.
+    if (vout_raw > VOUT_OV_TRIP_RAW)
+    {
+        s_vout_ov_count++;
+    }
+    else
+    {
+        s_vout_ov_count = 0U;
+    }
+
     if (v1_raw > V1_OV_TRIP_RAW)
+    {
+        s_v1_ov_count++;
+    }
+    else
+    {
+        s_v1_ov_count = 0U;
+    }
+
+    if (s_v1_ov_count >= CTRL_V1_OV_COUNTS)
     {
         s_fault = FAULT_OVERVOLTAGE_V1;
         s_trip_requested = true;
     }
-    else if (vout_raw > VOUT_OV_TRIP_RAW)
+    else if (s_vout_ov_count >= CTRL_VOUT_OV_COUNTS)
     {
         s_fault = FAULT_OVERVOLTAGE_VOUT;
         s_trip_requested = true;
