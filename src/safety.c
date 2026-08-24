@@ -118,6 +118,29 @@ void safety_init(void)
     EPwm2Regs.TZSEL.bit.OSHT6 = 1;
     EPwm2Regs.TBCTL.bit.FREE_SOFT = 0;
 
+#if SAFETY_BLANK_STAGE2
+    // ---- FENETRE D'AVEUGLEMENT, ETAGE 2 -----------------------------
+    // Meme chaine que l'etage 1, meme piege : SRCSEL dit au filtre QUOI
+    // filtrer, EVT1SRCSEL dit a DCAEVT1 de prendre la sortie FILTREE. Sans
+    // la seconde ligne le filtre tourne dans le vide et la Trip Zone
+    // continue de voir l'evenement brut -- panne muette.
+    EPwm2Regs.DCFCTL.bit.SRCSEL     = DC_SRC_DCAEVT1;
+    EPwm2Regs.DCACTL.bit.EVT1SRCSEL = DC_EVT_FLT;
+
+    // Ancrage sur CTR = 0. Sur CET etage, reste en convention AQ d'origine,
+    // CTR = 0 est l'instant d'AMORCAGE -- et c'est l'amorcage qui produit la
+    // pointe vue par le shunt, place dans la source du MOSFET. Voir calib.h.
+    EPwm2Regs.DCFCTL.bit.PULSESEL   = DC_PULSESEL_ZERO;
+    EPwm2Regs.DCFOFFSET             = SAFETY_BLANK_OFFSET_COUNTS;
+    EPwm2Regs.DCFWINDOW             = SAFETY_BLANK_WINDOW_COUNTS;
+    EPwm2Regs.DCFCTL.bit.BLANKE     = DC_BLANK_ENABLE;
+    EPwm2Regs.DCFCTL.bit.BLANKINV   = DC_BLANK_NOTINV;
+
+    // EVT1FRCSYNCSEL laisse a sa valeur de reset, comme sur l'etage 1 : ce
+    // bit gouverne la latence de declenchement de la protection, on ne le
+    // change pas au passage d'un reglage de filtrage.
+#endif
+
     // Efface un trip herite d'AVANT ce demarrage. TZFLG.OST est latche dans
     // le materiel : il survit a un reset logiciel comme a un simple
     // rechargement de programme, et sans ce clear le PWM resterait coupe

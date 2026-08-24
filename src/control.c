@@ -79,6 +79,16 @@ static volatile fault_code_t s_fault = FAULT_NONE;
 static volatile bool s_run_requested = false;
 static volatile bool s_trip_requested = false;
 
+// Extinction synchrone des DEUX etages, demandee par la boucle principale
+// le temps de sequencer la coupure de HT. Voir control_coast().
+static volatile bool s_coast = false;
+// Dernier duty commande a chaque etage, en Q8 counts. Point de depart de
+// l'extinction progressive.
+static int32_t s_coast_duty_q8[2] = {0, 0};
+// Plancher de l'extinction, en Q8 counts, calcule a l'init depuis la
+// periode de chaque etage.
+static int32_t s_coast_floor_q8[2] = {0, 0};
+
 // Sequences ADC consecutives au-dessus des seuils de surtension. Voir
 // CTRL_VOUT_OV_COUNTS et CTRL_V1_OV_COUNTS dans calib.h.
 static uint16_t s_vout_ov_count = 0U;
@@ -320,6 +330,11 @@ static int32_t regulate(uint16_t i, int32_t measured_raw)
         }
     }
 
+    // Memorise pour que l'extinction progressive sache d'ou partir : sans
+    // ca il faudrait relire CMPA, donc convertir en sens inverse et
+    // dependre de la convention AQ de l'etage.
+    s_coast_duty_q8[i] = duty;
+
     pwm_set_duty_q8(k_stages[i], (uint32_t)duty);
 
     return error;
@@ -345,7 +360,49 @@ void control_init(void)
         uint16_t period = pwm_get_period_counts(k_stages[i]);
 
         s_duty_max_counts[i] = (uint16_t)(CTRL_DUTY_MAX * (float)period);
+
+        // ---- BORNE DE L'INTEGRATEUR : INCOHERENTE, ET LAISSEE AINSI -----
+        //
+        // LE DEFAUT. Depuis l'ajout de k_gain_div_shift dans le terme
+        // integral, le decalage reellement applique vaut
+        // (CTRL_KI_SHIFT - PWM_DUTY_FRAC_BITS + k_gain_div_shift[i]), mais
+        // cette borne-ci l'ignore. Sur l'etage 1, ou k_gain_div_shift = 1,
+        // i_term plafonne donc a 142 counts alors que le regime etabli en
+        // demande 220 a Vin = 20 V et V1 = 75 V. La boucle degenere en
+        // proportionnel pur des qu'elle est chargee.
+        //
+        // C'EST MESURE : consigne 75 V, multimetre 81 V a vide et 72 V sous
+        // 25 kOhms ; cote carte, 0 V d'erreur a vide et 7 V en charge. A
+        // vide le duty requis est faible et l'integrateur n'est pas ecrete ;
+        // en charge il l'est. Une erreur statique qui SUIT LA CHARGE accuse
+        // toujours l'integrateur, jamais le gain proportionnel.
+        //
+        // POURQUOI ON NE LE CORRIGE PAS ICI. Corriger la borne seule REND A
+        // L'ETAGE 1 L'ACCES A CTRL_DUTY_MAX = 0,95, et il y va sur un
+        // echelon de charge -- la fermeture de HV_EN. A D = 0,95 l'ondulation
+        // vaut 20 x 0,95 x 5 us / 47 uH = 2,0 A par periode, contre 1,0 A a
+        // D = 0,47 : le seuil de 5 A est atteint en quelques cycles.
+        // Constate au banc le 24/08, defaut overI1 a la fermeture de HV_EN,
+        // alors que la version au bornage fautif passait.
+        //
+        // Autrement dit, le bug agissait comme un LIMITEUR DE COURANT
+        // involontaire, et le supprimer decouvre une fragilite preexistante :
+        // la boucle de l'etage 1 ne sait pas encaisser un echelon de charge.
+        //
+        // CE QU'IL FAUDRA FAIRE, ensemble et pas separement :
+        //   - corriger cette borne ;
+        //   - ET borner le duty de l'etage 1 a ce dont il a reellement besoin
+        //     (0,87 au pire, a Vin = 9,5 V) au lieu de 0,95 ;
+        //   - ET/OU sequencer la fermeture de HV_EN comme on a sequence son
+        //     ouverture, pour supprimer l'echelon plutot que de l'encaisser.
         s_accum_max[i] = ((int32_t)s_duty_max_counts[i]) << CTRL_KI_SHIFT;
+
+        // Plancher de l'extinction sequencee, en Q8 counts. Calcule ici et
+        // pas dans coast_stage() : la periode differe d'un etage a l'autre
+        // (300 et 600 counts), et une division n'a rien a faire dans l'ISR.
+        s_coast_floor_q8[i] =
+            (int32_t)(CTRL_COAST_FLOOR_PCT * 0.01f * (float)period) << PWM_DUTY_FRAC_BITS;
+        s_coast_duty_q8[i] = 0;
 
         s_target_raw[i] = 0;
         s_ramp_q8[i] = 0;
@@ -603,6 +660,75 @@ void control_fast_check(void)
 // donc plus prioritaire que INT13 -- la preempte sans dommage : la
 // surveillance de survoltage garde sa latence de 15 us quoi qu'il arrive
 // ici. La regulation reste prioritaire sur l'UART, qui est en groupe 9.
+// Descend le duty d'un etage vers son plancher, un pas par tick.
+//
+// SYNCHRONE, et c'est tout le sujet. On ecrit CMPA, on ne touche NI a la
+// porte ET NI a AQCSFRC :
+//
+//   - AQCSFRC coupe le MOSFET a un instant QUELCONQUE de la periode, donc
+//     HORS de la fenetre de blanking ancree sur CTR = 0. Le front produit
+//     alors une pointe que le comparateur voit -- defaut overI2 constate
+//     au banc le 24/08 en coupant HT a 500 V.
+//   - CMPA est en registre d'ombre et bascule au passage a zero : chaque
+//     impulsion se termine normalement a son compare. Aucun front ne sort
+//     de la fenetre.
+//
+// PROGRESSIF, et sur les DEUX etages. Une extinction en un pas fait
+// disparaitre la charge de l'etage amont instantanement -- c'est ce qui a
+// produit le defaut overV1 en coupant HT a 400 V, V1 montant de 76,3 a
+// 83,5 V pour une coupure a 82.
+//
+// PLANCHER NON NUL. On s'arrete a quelques pour cent plutot qu'a zero :
+// l'etage continue de commuter, donc reste dans un regime normal, et la
+// reprise ne part pas d'un etat degenere. A ce duty la tension visee tombe
+// bien sous celle du condensateur de sortie, la diode est bloquee et plus
+// rien n'est transmis -- l'effet est celui de zero, sans la discontinuite.
+static void coast_stage(uint16_t i, int32_t measured_raw)
+{
+    // L'integrateur est remis a zero : la reprise ne deroule pas une avance
+    // perimee, elle repart d'un duty nul et remonte si besoin.
+    s_accum[i] = 0;
+
+    // LA RAMPE EST COLLEE A LA TENSION MESUREE. C'est la seule des trois
+    // formes essayees qui tienne, et les deux autres ont echoue de facons
+    // OPPOSEES -- toutes deux constatees au banc le 24/08 :
+    //
+    //   - remise a ZERO : la rampe repart de 0 et met 500/510 = 0,98 s a
+    //     rejoindre la consigne. Elle finit par rattraper la tension reelle
+    //     et l'etage 2 pousse alors dans un condensateur de 2 uF QUE PLUS
+    //     RIEN NE CHARGE, HV_EN etant ouvert. -> overVout UNE SECONDE apres
+    //     la coupure.
+    //   - laissee EN PLACE : elle reste a 500 V. Au RUN suivant la sortie
+    //     est a zero et l'erreur vaut 500 V d'emblee, duty sature, plus
+    //     aucun soft-start. -> overVout des le demarrage.
+    //
+    // Collee au mesure, elle satisfait les deux : erreur nulle a la reprise
+    // immediate, et point de depart correct pour un demarrage ulterieur.
+    // C'est aussi ce que promettait deja le commentaire de main.c, "control.c
+    // rampe ensuite depuis la tension mesuree" -- promesse qui n'etait en
+    // fait implementee nulle part.
+    s_ramp_q8[i] = measured_raw << RAMP_FRAC_BITS;
+
+    if (s_coast_duty_q8[i] > (s_coast_floor_q8[i] + (int32_t)CTRL_COAST_STEP_Q8))
+    {
+        s_coast_duty_q8[i] -= (int32_t)CTRL_COAST_STEP_Q8;
+    }
+    else
+    {
+        s_coast_duty_q8[i] = s_coast_floor_q8[i];
+    }
+
+    pwm_set_duty_q8(k_stages[i], (uint32_t)s_coast_duty_q8[i]);
+}
+
+// Extinction sequencee des DEUX etages, sans inhibition materielle. A
+// n'utiliser que pour sequencer une coupure de HT : ce n'est PAS un organe
+// de securite -- la protection rapide reste le comparateur et la Trip Zone.
+void control_coast(bool coast)
+{
+    s_coast = coast;
+}
+
 void control_tick(void)
 {
     int32_t v1_raw = (int32_t)adc_get_raw(ADC_CH_V1);
@@ -757,6 +883,15 @@ void control_tick(void)
         // Regime etabli. Les rampes restent actives : un changement de
         // consigne en marche est suivi progressivement, ce qui est
         // exactement le cas d'usage des essais par paliers.
+        if (s_coast)
+        {
+            // EXTINCTION SEQUENCEE, demandee par main.c avant d'ouvrir
+            // HV_EN. Voir HV_OFF_INHIBIT_SEQ dans calib.h.
+            coast_stage(S1, v1_raw);
+            coast_stage(S2, vout_raw);
+            break;
+        }
+
         ramp_toward(S1, V1_RAMP_STEP_Q8);
         (void)regulate(S1, v1_raw);
 
@@ -784,6 +919,13 @@ void control_tick(void)
             // transition : rien ne doit pouvoir laisser une valeur
             // residuelle dans CMPA de l'etage 2.
             stage_reset(S2);
+
+            // Et la rampe suit la tension mesuree tant qu'on ne regule pas.
+            // Sans ca elle resterait figee a sa derniere valeur, et le jour
+            // ou l'etage 2 est reactive l'erreur vaudrait d'emblee tout
+            // l'ecart -- duty sature, aucun soft-start. C'est la meme regle
+            // que dans coast_stage(), et pour la meme raison.
+            s_ramp_q8[S2] = vout_raw << RAMP_FRAC_BITS;
 #endif
         }
         break;

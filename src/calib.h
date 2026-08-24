@@ -812,7 +812,27 @@
 // et, en amont, l'ampli de l'etage 1 sature vers 5 A -- c'est lui qui
 // borne reellement, pas le DAC.
 #define SAFETY_ISHUNT_THRESHOLD_S1_A  5.0f   // [V0.2] crete, etage 1
-#define SAFETY_ISHUNT_THRESHOLD_S2_A  3.0f   // [V0.2] crete, etage 2
+// >>> REMIS A 4,0 A LE 24/08/2026. NE PAS REDESCENDRE. <<<
+// Baisse a 3,0 A la veille au soir, sur le seul argument du courant reel
+// (1,5 A crete a 50 W). ERREUR : a 450 V sur 25 kOhms l'etage 2 ne tire
+// que 0,66 A crete, soit 0,42 V, et le comparateur declenchait quand meme
+// -- il voyait donc au moins 1,9 V, QUATRE FOIS ET DEMIE le courant reel.
+//
+// DEUX RAISONS DE GARDER DE LA MARGE, toutes deux dans hardware.md :
+//
+// 1. L'ARTEFACT DE COMMUTATION EXISTE SUR LES DEUX VOIES. Le document
+//    releve des pointes atteignant 3,4 V en sortie d'ampli sur I1 comme
+//    sur I2. Les 4,0 A d'origine ne protegeaient pas contre 4 A de
+//    courant : ils donnaient de la marge contre cette pointe.
+//
+// 2. MEAS_I2_GAIN_V_PER_A = 0,637 N'A JAMAIS ETE MESUREE (marque en rouge
+//    dans hardware.md, "jamais mesuree ni sur V0.1 ni sur V0.2"). Exprimer
+//    ce seuil en amperes est donc une commodite d'ecriture, pas une
+//    grandeur physique. La seule valeur reelle est la TENSION au
+//    comparateur : 4,0 A y correspondent a 2,548 V.
+//
+// Tant que ce gain n'est pas etalonne, ne juger ce seuil qu'en volts.
+#define SAFETY_ISHUNT_THRESHOLD_S2_A  4.0f   // = 2,548 V au comparateur
 #define SAFETY_DAC_VREF_V           3.3f
 
 // Qualification du comparateur : nombre d'echantillons SYSCLK consecutifs
@@ -919,6 +939,30 @@ ERREUR_seuil_etage2_au_dela_de_la_reference_DAC_baisser_SAFETY_ISHUNT_THRESHOLD_
 // A NE REACTIVER QUE si une pointe de commutation est un jour identifiee
 // au scope comme franchissant le seuil. Ce n'est pas le cas aujourd'hui.
 #define SAFETY_BLANK_STAGE1          0
+
+// ---- BLANKING ETAGE 2, ACTIVE LE 24/08/2026 -------------------------
+// RELEVE AU SCOPE sur la sortie d'ampli I2, 5 us/div, a 450 V sur 25 kOhms :
+// des pointes ETROITES a 3,0-3,1 V, UNE PAR COMMUTATION a 100 kHz, sur une
+// ligne de base qui decroit de 1,5 a 0,2 V. Le seuil est a 2,548 V.
+//
+// C'est le cas OPPOSE a celui de l'etage 1 hier. Sur I1 l'evenement etait
+// une enveloppe de 60 a 130 us -- un emballement de boucle -- contre
+// laquelle une fenetre de 500 ns ne pouvait rien, et le blanking avait ete
+// desactive a juste titre. Ici c'est une vraie pointe de commutation.
+//
+// POURQUOI CA MARCHE SANS INVERSER L'AQ DE L'ETAGE 2. Le shunt est dans la
+// SOURCE du MOSFET : il ne voit une pointe de courant qu'a l'AMORCAGE,
+// quand Coss se decharge a travers le canal. Au blocage le courant du shunt
+// s'annule. Or en convention d'origine -- celle que garde l'etage 2 --
+// l'amorcage tombe sur CTR = 0, qui est FIXE. PULSESEL sait l'ancrer la.
+//
+// C'est l'inverse de l'etage 1, ou l'inversion de l'AQ etait necessaire
+// parce que c'est le BLOCAGE qu'on voulait couvrir.
+//
+// SI LE DEFAUT PERSISTE, c'est que la pointe tombe en fait sur CMPA, donc
+// au blocage, et aucune fenetre ancree sur CTR = 0 ne l'atteindra. Il
+// faudrait alors inverser l'AQ de l'etage 2 -- chantier a part.
+#define SAFETY_BLANK_STAGE2          1
 #define SAFETY_BLANK_OFFSET_COUNTS   0U
 #define SAFETY_BLANK_WINDOW_COUNTS  30U
 // Le garde-fou de coherence avec PWM_AQ_TAIL_STAGE1 est plus bas dans ce
@@ -990,6 +1034,94 @@ ERREUR_seuil_etage2_au_dela_de_la_reference_DAC_baisser_SAFETY_ISHUNT_THRESHOLD_
 // Sans trame $C valide au-dela de ce delai, la liaison est declaree
 // perdue. La securite ne depend jamais de l'ESP32.
 #define UART_LINK_TIMEOUT_MS     2000U
+
+// ---- SEQUENCEMENT DE LA COUPURE HT (24/08/2026) ---------------------
+// TOUTE bascule HV_EN de 1 a 0 est un DELESTAGE, par construction : a
+// RUN = 0, enter_safe_state() force hv_enable_set(false) a chaque tour de
+// boucle, donc HV_EN y est deja bas et ne peut pas transiter. Une coupure
+// de HT se produit donc forcement CONVERTISSEUR EN MARCHE.
+//
+// Mesure : a 500 V sur 23,2 kOhms l'etage 2 debite 21,5 mA. La charge
+// disparait, ce courant part dans les 2 uF de C1 :
+//
+//   dV/dt = 21,5 mA / 2 uF = 10,8 V/ms
+//   20 V de marge sous la coupure a 520 V  ->  1,9 ms pour reagir
+//
+// La boucle n'y arrivait pas, d'ou le defaut FAULT_OVERVOLTAGE_VOUT a
+// chaque coupure de HT. Ce n'est pas un artefact de mesure : l'energie de
+// L2 ne represente que 0,1 V sur C1.
+//
+// PARADE : inhiber l'etage 2 AVANT d'ouvrir HV_EN, et attendre. Plus rien
+// ne pompe au moment de l'ouverture, donc plus de delestage. Cela ne coute
+// AUCUNE marge de stabilite, contrairement a remonter Kp -- lequel est
+// justement le terme qu'on a divise par deux ce jour pour mater
+// l'oscillation de l'etage 1.
+//
+// L'inhibition passe par la porte ET et la sortie ePWM, pas par le duty :
+// control_tick() reecrit CMPA toutes les 49 us et ecraserait toute ecriture
+// venue de la boucle principale.
+//
+// COMBIEN DE TEMPS. La physique n'en demande presque pas : la porte ET et
+// la sortie ePWM de l'etage 2 sont inhibees en quelques microsecondes, et
+// l'inductance se desexcite dans la foulee. UNE milliseconde suffirait.
+//
+// L'operateur tolere 100 a 200 ms sur cette commande, qui n'est PAS un
+// organe de securite -- la protection rapide, c'est le comparateur et la
+// Trip Zone, pas HV_EN. On dispose donc d'une marge confortable.
+//
+// 20 ms retenus : 400 fois le pas de regulation, imperceptible a l'usage,
+// et loin sous le budget. Aller plus loin ne gagnerait rien -- ca ne ferait
+// que retarder l'execution d'un ordre de l'operateur, et prolonger d'autant
+// l'alimentation de la charge qu'il vient de demander a couper.
+//
+// 4000 sequences ADC a 66,7 kHz = 60 ms. Doit couvrir les 50 ms de
+// l'extinction progressive (CTRL_S2_COAST_STEP_Q8) avec de la marge :
+// ouvrir HV_EN avant que l'etage 2 soit eteint, c'est le delestage de
+// depart, celui qui a produit le tout premier overVout.
+#define HV_OFF_INHIBIT_SEQ     4000U
+
+// ---- VITESSE D'EXTINCTION DE L'ETAGE 2 ------------------------------
+// Pas de descente du duty, en Q8 counts, applique a chaque tick de
+// regulation pendant le coast.
+//
+// POURQUOI PROGRESSIF. La premiere version faisait tomber CMPA de 510 a 0
+// en UN pas, soit 49 us. L'etage 1 perdait alors sa charge instantanement
+// -- l'etage 2 tirait 0,1 A sur V1 -- et V1 montait jusqu'au defaut
+// FAULT_OVERVOLTAGE_V1, constate au banc le 24/08 en coupant HT a 400 V.
+// Il n'y a que 7 V entre la consigne de 75 V et la coupure a 82.
+//
+// C'est le TROISIEME delestage de cette sequence, et chacun s'est
+// manifeste a son tour a mesure qu'on reglait le precedent :
+//   1. ouvrir HV_EN en marche      -> delestage de l'etage 2 -> overVout
+//   2. inhiber par la porte ET     -> front hors blanking    -> overI2
+//   3. couper CMPA d'un pas        -> delestage de l'etage 1 -> overV1
+//
+// 2 counts Q8 par pas a 20,4 kHz : partant de ~510 counts entiers, soit
+// 130560 en Q8, l'extinction prend 65280 pas... trop lent. On raisonne en
+// counts ENTIERS : 512 en Q8 = 2 counts entiers par pas, donc 510 counts
+// en 255 pas, soit 12,5 ms. Confortablement dans les 20 ms d'attente avant
+// l'ouverture de HV_EN, et assez lent pour que la boucle de l'etage 1
+// suive sans a-coup.
+// 128 en Q8 = 0,5 count entier par pas de regulation. Partant de ~510
+// counts, l'extinction prend 1020 pas, soit **50 ms** a 20,4 kHz.
+// Confortablement dans les 100 a 200 ms que l'operateur tolere sur cette
+// commande, qui n'est pas un organe de securite.
+#define CTRL_COAST_STEP_Q8      128U
+
+// ---- PLANCHER DE L'EXTINCTION ---------------------------------------
+// On s'arrete a quelques pour cent, PAS a zero.
+//
+// A 3 % l'etage 1 viserait 20 / 0,97 = 20,6 V et l'etage 2 environ 77 V --
+// tous deux tres en dessous de la tension deja presente sur leur
+// condensateur de sortie. La diode est donc bloquee et plus rien n'est
+// transmis : l'effet est celui de zero.
+//
+// Mais l'etage CONTINUE DE COMMUTER, ce qui evite deux choses : la
+// discontinuite d'un arret franc, et le regime degenere ou le duty nul
+// place CMPA a une extremite -- la ou PWM_HRPWM_GUARD_COUNTS ecarte la
+// partie fractionnaire et ou la reprise repartirait d'un etat different de
+// celui qu'on a quitte.
+#define CTRL_COAST_FLOOR_PCT      3.0f
 
 // ADC : reference interne obligatoire (VREFHI partage avec ADCINA0/VIN),
 // pleine echelle 3,3 V. Conversion brut -> volts : V = raw * 3.3 / 4096.
@@ -1400,6 +1532,59 @@ ERREUR_seuil_etage2_au_dela_de_la_reference_DAC_baisser_SAFETY_ISHUNT_THRESHOLD_
 // diviser par deux divise par deux la reponse au delestage, et il ne reste
 // que 20 V de marge sous la coupure a 520 V, jamais testes en delestage
 // sur l'etage 2. A caracteriser avant toute montee a 500 V.
+// >>> REMIS A 0 LE 24/08/2026, PAR LA MESURE. <<<
+// Kp avait ete divise par deux la veille pour mater l'oscillation
+// sous-harmonique de l'etage 1, a une cadence de 98 us. Depuis, la cadence
+// est passee a 49 us -- ce qui double a soi seul la marge de phase.
+//
+// ET LE COUT S'EST MATERIALISE. Trace au scope du 24/08 : en coupant HT a
+// 400 V, V1 monte de 76,3 a 83,5 V et franchit la coupure a 82. Le terme
+// proportionnel est le SEUL qui reponde a un delestage, l'integrateur
+// mettant des secondes a se derouler :
+//
+//   erreur necessaire pour annuler le duty = 220 counts / (42,4 raw/V x Kp x 2^8 / 256)
+//     Kp = 0,25 -> 21 V     impossible, la marge n'est que de 7 V
+//     Kp = 0,5  -> 10,5 V   impossible
+//     Kp = 1,0  -> 5,2 V    passe, mais de justesse
+//
+// ESSAYE A 0 (Kp = 1,0) PUIS REVENU A 1 LE 24/08/2026.
+//
+// LES DEUX VALEURS ONT UN DEFAUT MESURE. Ce n'est pas un reglage a
+// trouver, c'est une CONTRAINTE CONTRADICTOIRE, et il faut la traiter
+// comme telle.
+//
+// A Kp = 0,25 (division globale x2 puis etage 1 x2) :
+//
+//   - Reponse au delestage insuffisante. Le terme proportionnel est le
+//     seul rapide, l'integrateur mettant des secondes a se derouler. Pour
+//     annuler un duty de 220 counts il faut 21 V d'erreur, alors que la
+//     marge V1 n'en offre que 7.
+//   - Trace du 24/08 a la coupure de HT : V1 monte de 76,3 a 83,5 V et
+//     franchit la coupure a 82.
+//   - Trace du 24/08 a la montee vers 500 V : au demarrage de l'etage 2,
+//     V1 S'EFFONDRE DE 75 A 36 V pendant 450 ms. Et l'etage 1 ne saturait
+//     pas -- a Vin = 20 V et V1 = 36 V il tournait a D = 0,44, loin de son
+//     plafond de 0,95. Il ne demandait pas. Defaut de gain, pas de
+//     puissance. C'est aussi ce qui produit le overVout : l'etage 2 monte
+//     a D = 0,93 pour atteindre 500 V depuis 36 V, puis V1 revient a 83 V
+//     et 83/(1-0,93) vise 1150 V.
+//
+// A Kp = 1,0 :
+//
+//   - L'enveloppe d'oscillation REPART A LA HAUSSE, croissante sur toute
+//     la duree de la trace. C'est la sous-harmonique matee la veille en
+//     divisant Kp, et la cadence portee a 49 us n'a pas suffi a la tenir.
+//
+// AUCUN REGLAGE DE Kp NE SATISFAIT LES DEUX. La sortie est ailleurs :
+//   - elargir la marge V1, aujourd'hui de 7 V seulement, ce qui suppose
+//     plus de capacite sur ce noeud ET un C6 d'un calibre superieur a
+//     100 V ;
+//   - ou passer en commande en mode courant, dont le materiel est deja
+//     sur la carte (COMP1, DACVAL, la mesure I1).
+//
+// En attendant, on garde la valeur basse : le delestage est desormais
+// SEQUENCE par control_coast(), donc son defaut principal est contourne,
+// alors que l'oscillation, elle, ne l'est pas.
 #define CTRL_KP_DIV_SHIFT         1U   // Kp effectif = 0,5
 
 // ---- GAIN PAR ETAGE (23/08/2026) ------------------------------------
@@ -1462,8 +1647,17 @@ ERREUR_seuil_etage2_au_dela_de_la_reference_DAC_baisser_SAFETY_ISHUNT_THRESHOLD_
 // gain qui est trop eleve POUR CE POINT DE FONCTIONNEMENT, ou son entree
 // V1 trop bruitee. Le bouclage decrit dans pwm.c (bruit de commutation sur
 // V1 -> l'integrateur corrige -> le duty bouge) reste le suspect de fond.
+// >>> ETAGE 1 REMIS A 0 LE 24/08/2026, meme raison que CTRL_KP_DIV_SHIFT.
+// Les deux divisions se cumulaient : Kp valait 0,25, soit le quart de sa
+// valeur d'origine, et il faut 21 V d'erreur a ce gain pour repondre a un
+// delestage qui n'en laisse que 7. Les deux sont rendus ensemble.
+//
+// ETAGE 1 REVENU A 1 LE 24/08/2026, meme raison que CTRL_KP_DIV_SHIFT :
+// les deux divisions se cumulent, Kp vaut donc 0,25 sur cet etage. Le
+// defaut de cette valeur est connu et documente ci-dessus -- il est
+// contourne par le sequencement, pas corrige.
 #define CTRL_GAIN_DIV_SHIFT_S1    1U   // etage 1 : gain divise par deux
-#define CTRL_GAIN_DIV_SHIFT_S2    0U   // etage 2 : rendu a son gain d'origine
+#define CTRL_GAIN_DIV_SHIFT_S2    0U   // etage 2 : gain d'origine
 
 // ---- Resultat mesure avec Kp = 1, le 20/08/2026 ----------------------
 //

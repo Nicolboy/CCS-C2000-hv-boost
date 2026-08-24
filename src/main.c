@@ -133,12 +133,29 @@ static bool s_power_path_armed = false;
 volatile bool g_s2_en_test = true;
 #endif
 
+// Coupure HT en cours : l'etage 2 est inhibe et l'ouverture de HV_EN
+// attend. Voir HV_OFF_INHIBIT_SEQ dans calib.h.
+static bool s_hv_off_pending = false;
+static uint32_t s_hv_off_seq = 0U;
+// Dernier etat COMMANDE a HV_EN. bsp_gpio n'offre pas de relecture, et il
+// faut un front pour declencher le sequencement.
+static bool s_hv_on = false;
+
 static void enable_power_path(void)
 {
     // Etage 2 desactive (consigne de sortie nulle) : sa porte ET reste
     // fermee et sa sortie ePWM inhibee. control.c maintient deja son duty a
     // zero, mais ne pas armer la porte rend l'etage franchement inerte --
     // ce qui est observable au scope, donc verifiable.
+    //
+    // PENDANT LE SEQUENCEMENT DE LA COUPURE HT, ON NE TOUCHE PAS A CETTE
+    // PORTE. La premiere version le faisait et produisait un defaut overI2 :
+    // fermer la porte coupe le MOSFET a un instant quelconque de la periode,
+    // donc hors de la fenetre de blanking ancree sur CTR = 0, et le front
+    // qui en resulte franchit le seuil du comparateur.
+    //
+    // L'extinction passe desormais par control_coast(), qui ecrit
+    // CMPA = 0 de facon SYNCHRONE. Voir HV_OFF_INHIBIT_SEQ dans calib.h.
     bool s2 = control_s2_enabled();
 
 #if STAGE2_OPENLOOP_TEST
@@ -253,6 +270,12 @@ static void enter_safe_state(void)
     stage_enable_set(STAGE_1, false);
     stage_enable_set(STAGE_2, false);
     hv_enable_set(false);
+    // L'etat sur court-circuite tout sequencement de coupure HT : ici on ne
+    // menage rien, on coupe. Le PWM est deja inhibe juste au-dessus, donc il
+    // n'y a plus de delestage possible de toute facon.
+    s_hv_on = false;
+    s_hv_off_pending = false;
+    control_coast(false);
 
     // Decharge active. Elle vient APRES la coupure de HV_EN : la charge est
     // d'abord isolee, puis le condensateur vide en ~2 s. Sans elle, les
@@ -493,7 +516,57 @@ void main(void)
             // seulement si l'operateur l'a demande. Un boost a 0 % de duty
             // ne donne pas 0 V : HV_EN reste le seul organe qui isole
             // reellement la charge (PROMPT §6 etape 6).
-            hv_enable_set(g_last_cmd.ht_enabled && control_hv_allowed());
+            // SEQUENCEMENT DE LA COUPURE. Voir HV_OFF_INHIBIT_SEQ.
+            //
+            // Ouvrir HV_EN pendant que l'etage 2 pompe, c'est retirer la
+            // charge d'un coup : 21,5 mA dans 2 uF font 10,8 V/ms, et il n'y
+            // a que 20 V sous le seuil. On inhibe donc l'etage 2 d'abord, on
+            // laisse passer HV_OFF_INHIBIT_SEQ sequences ADC, puis seulement
+            // on ouvre.
+            //
+            // Le comptage se fait sur les sequences ADC et non sur des tours
+            // de boucle : la boucle principale est libre, un compteur de
+            // passages ne mesurerait aucune duree. Meme raison que pour
+            // l'anti-rebond des NTC.
+            {
+                bool hv_want = g_last_cmd.ht_enabled && control_hv_allowed();
+
+                if (hv_want)
+                {
+                    // Demande active : on ferme, et un sequencement en cours
+                    // est abandonne.
+                    s_hv_off_pending = false;
+                    control_coast(false);
+                    hv_enable_set(true);
+                    s_hv_on = true;
+                }
+                else if (s_hv_on)
+                {
+                    // On ne veut plus de HT alors que HV_EN est encore ferme.
+                    if (!s_hv_off_pending)
+                    {
+                        s_hv_off_pending = true;
+                        s_hv_off_seq = adc_get_sequence_count();
+                        control_coast(true);
+                    }
+
+                    // Pendant l'attente HV_EN reste FERME : la charge est
+                    // encore la, et c'est precisement ce qui evite le
+                    // delestage pendant que l'etage 2 s'eteint. L'inhibition
+                    // de l'etage 2, elle, a deja pris effet dans
+                    // enable_power_path() via s_hv_off_pending.
+                    if ((uint32_t)(adc_get_sequence_count() - s_hv_off_seq)
+                        >= HV_OFF_INHIBIT_SEQ)
+                    {
+                        hv_enable_set(false);
+                        s_hv_on = false;
+                        s_hv_off_pending = false;
+                        // L'etage 2 reprend la main : la sortie est isolee,
+                        // il la maintiendra a vide, a duty quasi nul.
+                        control_coast(false);
+                    }
+                }
+            }
         }
         else
         {

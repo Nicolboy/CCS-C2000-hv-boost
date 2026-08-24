@@ -72,6 +72,20 @@ void control_fast_check(void);
 // demandee.
 void control_tick(void);
 
+// Extinction sequencee des DEUX etages : leur duty descend progressivement
+// vers CTRL_COAST_FLOOR_PCT, un pas par tick de regulation.
+//
+// N'agit NI sur la porte ET NI sur AQCSFRC : ce n'est PAS un organe de
+// securite, c'est le contraire d'une inhibition. La protection rapide reste
+// le comparateur et la Trip Zone.
+//
+// Sert a sequencer la coupure de HT. Trois defauts successifs ont impose
+// cette forme, chacun apparaissant quand le precedent etait regle :
+//   - ouvrir HV_EN en marche delestait l'etage 2          -> overVout
+//   - inhiber par la porte ET coupait hors blanking       -> overI2
+//   - eteindre le seul etage 2 delestait l'etage 1        -> overV1
+void control_coast(bool coast);
+
 // Lecture d'etat pour la telemetrie et l'affichage (boucle principale).
 ctrl_state_t control_get_state(void);
 
