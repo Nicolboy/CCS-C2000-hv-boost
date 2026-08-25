@@ -869,6 +869,22 @@
 //   etage 2 :  3,3          / 0,637 = 5,18 A
 // et, en amont, l'ampli de l'etage 1 sature vers 5 A -- c'est lui qui
 // borne reellement, pas le DAC.
+// ---- AVANT DE RETOUCHER A CE SEUIL, LIRE hardware.md (25/08/2026) -----
+// Les defauts overI1 qui bloquaient la montee en puissance ne venaient PAS
+// du courant. Iin ne bougeait pas au moment de la coupure -- 1,69 A, verifie
+// deux fois. La cause est une RESONANCE DU FILTRE D'ENTREE a 3,28 kHz, entre
+// l'inductance des fils d'alimentation (13 uH deduits) et Cin (180 uF),
+// entretenue par la resistance incrementale negative du convertisseur
+// (-Vin²/P = -14 Ohms a 40 W). Voir hardware.md pour le detail et le remede.
+//
+// CONSEQUENCE POUR CE SEUIL : le remonter ne sert a rien et le baisser
+// aggrave. Ce que le comparateur voit est une enveloppe qui module des
+// pointes parasites deja a dix fois la pleine echelle -- 0,42 V a l'entree
+// de l'ampli sur un shunt de 0,01 Ohm feraient 42 A. Elles sont rejetees par
+// QUALSEL (533 ns) tant que l'enveloppe ne les allonge pas assez.
+//
+// Le plafond du DAC est de toute facon a 5,64 A : il n'y a que 0,6 A de
+// course au-dessus de la valeur actuelle, contre un facteur dix d'ecart.
 #define SAFETY_ISHUNT_THRESHOLD_S1_A  5.0f   // [V0.2] crete, etage 1
 // >>> REMIS A 4,0 A LE 24/08/2026. NE PAS REDESCENDRE. <<<
 // Baisse a 3,0 A la veille au soir, sur le seul argument du courant reel
@@ -994,8 +1010,44 @@ ERREUR_seuil_etage2_au_dela_de_la_reference_DAC_baisser_SAFETY_ISHUNT_THRESHOLD_
 // la fenetre en couvre 0,5. On aveuglait la protection pendant un
 // deux-centieme de la perturbation.
 //
-// A NE REACTIVER QUE si une pointe de commutation est un jour identifiee
-// au scope comme franchissant le seuil. Ce n'est pas le cas aujourd'hui.
+// ---- REACTIVE LE 24/08/2026 -----------------------------------------
+// La condition posee ci-dessus -- "ne reactiver que si une pointe de
+// commutation est identifiee au scope" -- n'a PAS ete remplie par une
+// capture sur I1. Elle l'a ete par un raisonnement que la mesure soutient,
+// et la difference est assumee ici plutot que masquee.
+//
+// CE QUI A CHANGE. L'echec du 23/08 tenait a ce que l'evenement etait une
+// enveloppe de 60 a 130 us -- un emballement de la boucle etage 1 -- contre
+// laquelle aucune fenetre ne pouvait rien. Cette instabilite est corrigee
+// depuis le 24/08 (bornage de l'integrateur et limiteur de vitesse).
+//
+// CE QUI RESTE. Une coupure overI1 survenant apres cinq minutes ALORS QUE
+// Iin N'A PAS BOUGE -- 1,69 A, verifie deux fois. Le courant reel est donc
+// hors de cause : c'est la chaine de mesure qui deborde. La qualification du
+// comparateur exigeant deja 533 ns continus (QUALSEL = 31 a 60 MHz),
+// l'evenement dure au moins cela : ce n'est pas la pointe de 150 ns decrite
+// plus haut, valeur vraisemblablement reprise de l'etage 2.
+//
+// D'ou la fenetre de 75 counts, et non 30. Voir SAFETY_BLANK_WINDOW_STAGE1.
+//
+// PREALABLE INDISPENSABLE, sans lequel ceci ne vaut rien : l'etage 1 est
+// repasse en convention AQ D'ORIGINE le meme jour. Le shunt etant dans la
+// source, la protection ne voit que l'AMORCAGE, qui n'est ancre sur CTR = 0
+// qu'en convention d'origine. Le garde-fou de compilation plus bas le
+// verifie desormais dans ce sens.
+// ---- MIS DE COTE LE 24/08/2026 --------------------------------------
+// Reactive puis remis a 0 le meme jour, sans avoir tourne. La raison n'est
+// pas un retour en arriere mais un changement de diagnostic : la pointe vue
+// par le comparateur vient de l'INDUCTANCE PROPRE DU SHUNT, pas d'un instant
+// de commutation qu'une fenetre saurait masquer. Le blanking traiterait un
+// symptome a l'endroit ou il n'est pas produit.
+//
+// Et depuis le passage des deux etages en convention tail, une fenetre
+// ancree sur CTR = 0 couvrirait le BLOCAGE -- instant ou le courant du shunt
+// s'annule, donc ou il n'y a rien a masquer.
+//
+// SI ON Y REVIENT : asservir DCFOFFSET a CMPA depuis l'ISR pour que la
+// fenetre suive l'amorcage, seul front que le shunt voit conduire.
 #define SAFETY_BLANK_STAGE1          0
 
 // ---- BLANKING ETAGE 2, ACTIVE LE 24/08/2026 -------------------------
@@ -1020,9 +1072,45 @@ ERREUR_seuil_etage2_au_dela_de_la_reference_DAC_baisser_SAFETY_ISHUNT_THRESHOLD_
 // SI LE DEFAUT PERSISTE, c'est que la pointe tombe en fait sur CMPA, donc
 // au blocage, et aucune fenetre ancree sur CTR = 0 ne l'atteindra. Il
 // faudrait alors inverser l'AQ de l'etage 2 -- chantier a part.
-#define SAFETY_BLANK_STAGE2          1
+// DESACTIVE LE 24/08/2026, ET C'EST UNE REGRESSION ASSUMEE. Cette fenetre
+// fonctionnait -- c'est elle qui avait permis a l'etage 2 de monter le matin
+// meme. Elle est levee parce que le passage de l'etage 2 en convention tail
+// la rend INOPERANTE : ancree sur CTR = 0, elle couvre desormais le blocage,
+// ou le courant du shunt est nul, et manque l'amorcage devenu mobile.
+//
+// La garder aveuglerait la protection a un instant ou il ne se passe rien.
+// Mieux vaut l'eteindre franchement que la laisser donner le change.
+#define SAFETY_BLANK_STAGE2          0
 #define SAFETY_BLANK_OFFSET_COUNTS   0U
-#define SAFETY_BLANK_WINDOW_COUNTS  30U
+
+// ---- FENETRE DE BLANKING, PAR ETAGE (24/08/2026) ---------------------
+// Scindee parce que les deux etages n'ont ni la meme perturbation ni la
+// meme periode, et qu'elargir la fenetre commune aveuglerait l'etage 2
+// deux fois et demie plus pour rien.
+//
+// ETAGE 2 : 30 counts = 500 ns. Dimensionne sur une capture -- pointes
+// etroites a 3,0-3,1 V pour un seuil a 2,548 V, une par commutation. Ca
+// fonctionne depuis le 24/08, on n'y touche pas.
+//
+// ETAGE 1 : 75 counts = 1,25 us. PLUS LARGE, et sur un argument, pas par
+// precaution. La qualification du comparateur exige deja 533 ns de
+// depassement CONTINU (QUALSEL = 31 a 60 MHz) : puisque la coupure se
+// produit, l'evenement dure au moins cela. Une fenetre de 500 ns serait donc
+// par construction trop courte -- c'est de l'arithmetique, pas une marge.
+//
+// LE PRIX, a ne pas minimiser : 1,25 us sur une periode de 5 us, la
+// protection de l'etage 1 est aveugle UN QUART DU TEMPS, et cet aveuglement
+// s'empile sur les 533 ns de QUALSEL. C'est un arbitrage de securite assume
+// pour depasser 200 V en charge, pas un reglage de confort.
+//
+// A RETRECIR des qu'une capture sur la sortie d'ampli I1 donnera la duree
+// reelle de l'evenement. 75 counts est un majorant deduit, pas une mesure.
+#define SAFETY_BLANK_WINDOW_STAGE1  75U
+#define SAFETY_BLANK_WINDOW_STAGE2  30U
+
+#ifdef SAFETY_BLANK_WINDOW_COUNTS
+#error "SAFETY_BLANK_WINDOW_COUNTS est scinde par etage : utiliser SAFETY_BLANK_WINDOW_STAGE1 / _STAGE2."
+#endif
 // Le garde-fou de coherence avec PWM_AQ_TAIL_STAGE1 est plus bas dans ce
 // fichier : ce symbole n'est pas encore defini ici.
 
@@ -2089,7 +2177,49 @@ ERREUR_seuil_etage2_au_dela_de_la_reference_DAC_baisser_SAFETY_ISHUNT_THRESHOLD_
 // Il reste deux fenetres libres en pire cas : 240-300 et 540-600. On se
 // place au debut de la premiere, l'etage 2 ayant un duty faible (~5 %,
 // soit 30 counts) ses deux fronts y tiennent.
-#define PWM_STAGE2_PHASE_COUNTS  250U
+// ---- RECALCULE LE 24/08/2026 : 250 -> 0 ------------------------------
+// Tout le raisonnement ci-dessus est PERIME. Il calculait des fenetres libres
+// pour V1 = 50 V (on est a 81) et, surtout, il traitait les fronts de
+// COUPURE comme mobiles -- ce qu'ils ne sont plus depuis que les deux etages
+// sont en convention tail. Conserve pour memoire de la methode, pas de la
+// valeur.
+//
+// NOUVELLE GEOMETRIE. Les trois blocages sont fixes :
+//   etage 1 : counts 0 et 300     (deux par periode de l'etage 2)
+//   etage 2 : la valeur ci-dessous
+//
+// Les deux blocages de l'etage 1 sont distants de 300 counts, soit 5 us : ils
+// ne peuvent pas tenir ensemble dans la fenetre de 1,25 us visee. C'est
+// structurel -- l'etage 1 commute deux fois par periode de l'etage 2. Le
+// mieux atteignable est de faire COINCIDER le blocage de l'etage 2 avec l'un
+// des deux, ce qui ne laisse que DEUX instants pollues par periode de 10 us
+// au lieu de trois.
+//
+// ESSAI A 0, PUIS REPLI A 150 -- 24/08/2026, LE MEME JOUR.
+//
+// 0 faisait coincider le blocage de l'etage 2 avec l'un de ceux de l'etage 1,
+// conformement a la strategie retenue : concentrer la pollution sur un
+// instant court et connu, puis la masquer. La note du 20/08 ci-dessus
+// reprochait justement a cette valeur d'additionner les parasites des deux
+// grilles ; c'etait devenu l'objectif.
+//
+// AU BANC : trois defauts overI1 en une seconde, sous 40 W a 200 V, la ou le
+// meme montage tenait a 35 W avant le changement.
+//
+// L'ERREUR EST DE SEQUENCEMENT, PAS DE STRATEGIE. La concentration n'a de
+// sens QU'ACCOMPAGNEE du masquage. Or le blanking a ete desactive dans le
+// meme chargement (voir SAFETY_BLANK_STAGE1/2) : on a superpose les deux
+// grilles sans rien pour absorber la somme. C'est la moitie a ne pas faire
+// seule.
+//
+// 150 place le blocage de l'etage 2 a MI-DISTANCE des deux blocages de
+// l'etage 1 (counts 0 et 300) -- l'ecartement maximal possible. C'est le
+// repli qui conserve l'ancrage des fronts, seul acquis reel du passage en
+// convention tail, tout en cessant d'additionner les perturbations.
+//
+// REVENIR A 0 quand le masquage existera : blanking asservi a CMPA via
+// DCFOFFSET, ou filtrage RC a l'entree du comparateur. Pas avant.
+#define PWM_STAGE2_PHASE_COUNTS  150U
 
 // ---- CE QUE CE DECALAGE NE PEUT PAS FAIRE ---------------------------
 //
@@ -2292,8 +2422,14 @@ ERREUR_seuil_etage2_au_dela_de_la_reference_DAC_baisser_SAFETY_ISHUNT_THRESHOLD_
 // (duty fige, mesure par PosDuty, trois points pour la monotonie). Elles
 // ne se deduisent pas : la position du MEP dans la chaine a ete etablie
 // par la mesure, pas par la documentation.
+// Repasse de HR_FEP a HR_REP le 24/08 avec le retour de l'etage 1 en
+// convention d'origine : le MEP ne sait que retarder, et c'est la convention
+// qui decide lequel des deux fronts CMPA produit a la broche.
 #define PWM_HRPWM_EDGMODE_STAGE1   HR_FEP
-#define PWM_HRPWM_EDGMODE_STAGE2   HR_REP
+// HR_REP -> HR_FEP le 24/08 avec le passage de l'etage 2 en convention tail :
+// le MEP ne sait que retarder, et c'est la convention qui decide lequel des
+// deux fronts CMPA produit a la broche.
+#define PWM_HRPWM_EDGMODE_STAGE2   HR_FEP
 
 // GARDE-FOU. L'ancien symbole unique ne doit plus exister : une
 // configuration perimee qui le definirait encore compilerait en silence
@@ -2344,8 +2480,38 @@ ERREUR_seuil_etage2_au_dela_de_la_reference_DAC_baisser_SAFETY_ISHUNT_THRESHOLD_
 //
 // ETAT : etage 1 bascule le 23/08/2026, etage 2 laisse en convention
 // d'origine comme temoin de comparaison sur la meme carte.
+// ---- CONVENTION TAIL SUR LES DEUX ETAGES (24/08/2026) ----------------
+// La reference du rapport cyclique est prise sur le front de BLOCAGE : la
+// conduction va de CMPA a PRD, donc le blocage tombe sur le passage a zero,
+// FIXE, et c'est l'amorcage qui se deplace.
+//
+// CE QUE CA DONNE, LES DEUX ETAGES ETANT INVERSES. Les compteurs sont deja
+// verrouilles en 2:1 sur la meme TBCLK ; les trois blocages occupent donc des
+// positions FIXES du repere commun, a tous les points de fonctionnement, sans
+// asservissement ni recalcul. C'est ce qui rend la zone polluee ancree au
+// lieu de se promener avec la charge.
+//
+// C'est le fondement de la strategie retenue : concentrer les commutations
+// des trois grilles dans une fenetre courte, et garantir que le RESTE de la
+// periode est propre -- au lieu d'esperer qu'un instant de mesure tombe bien.
+//
+// LES MESURES. Elles s'echantillonnent a mi-conduction, entre les deux
+// fronts, donc loin de la zone polluee par construction.
+// pwm_apply_adc_trigger() calcule cette mi-conduction selon la convention de
+// l'etage -- (CMPA + TBPRD + 1)/2 en tail -- il n'y a rien a re-regler.
+//
+// CE QUE CA COUTE. L'amorcage devient mobile sur les DEUX etages. Or c'est
+// lui, et non le blocage, que le shunt voit conduire une pointe : place dans
+// la SOURCE du MOSFET, il recoit la decharge de Coss a travers le canal,
+// tandis qu'au blocage son courant s'annule. Une fenetre de blanking ancree
+// sur CTR = 0 ne peut donc plus la couvrir.
+//
+// C'est assume : le blanking est mis de cote (voir SAFETY_BLANK_STAGE1/2),
+// la pointe venant de l'inductance propre du shunt plutot que d'un instant
+// masquable. Si on y revient, le contournement est connu -- asservir
+// DCFOFFSET a CMPA depuis l'ISR pour que la fenetre suive l'amorcage.
 #define PWM_AQ_TAIL_STAGE1   1
-#define PWM_AQ_TAIL_STAGE2   0
+#define PWM_AQ_TAIL_STAGE2   1
 
 // ---- LE RENVERSEMENT DU CODAGE DE L'ETAT DE REPOS -------------------
 //
@@ -2376,12 +2542,32 @@ ERREUR_seuil_etage2_au_dela_de_la_reference_DAC_baisser_SAFETY_ISHUNT_THRESHOLD_
 // pire, un garde-fou ecrit dans l'autre sens ne se declencherait jamais.
 //
 // La fenetre de blanking ne peut etre ancree que sur CTR = 0 ou CTR = PRD.
-// Sans l'inversion de l'AQ, le blocage de l'etage 1 tombe sur CMPA, donc a
-// un instant MOBILE : la fenetre masquerait un moment quelconque du cycle
-// au lieu de la commutation, et le ferait EN SILENCE -- on aveuglerait la
-// protection sans rien gagner.
-#if SAFETY_BLANK_STAGE1 && !PWM_AQ_TAIL_STAGE1
-#error "Blanking etage 1 sans inversion AQ : la fenetre serait ancree sur CTR=0 alors que le blocage tombe sur CMPA, donc a un instant mobile."
+// Elle doit donc couvrir un front FIXE, et le front a couvrir est celui que
+// le SHUNT voit.
+//
+// INVERSION DU 24/08/2026, et il faut lire la raison. Ce garde-fou exigeait
+// l'inverse : blanking INTERDIT sans inversion de l'AQ, au motif que le
+// BLOCAGE tombait sur CMPA. La premisse etait fausse.
+//
+// LES DEUX SHUNTS SONT DANS LA SOURCE DES MOSFET. Un shunt ainsi place ne
+// voit une pointe de courant qu'a l'AMORCAGE, quand Coss se decharge a
+// travers le canal ; au blocage, le courant du shunt s'annule. Le comparateur
+// ne voit donc JAMAIS le front de blocage, si rayonnant soit-il.
+//
+// C'est l'AMORCAGE qu'il faut ancrer, et il tombe sur CTR = 0 en convention
+// D'ORIGINE. L'inversion de l'AQ le rendrait mobile -- exactement ce que ce
+// garde-fou pretendait empecher, mais sur l'autre front.
+//
+// Confirmation experimentale a l'appui : l'etage 2, jamais inverse, blanke
+// correctement depuis le 24/08 ; l'etage 1, inverse le 23/08, presentait un
+// comportement irreproductible d'un essai a l'autre -- la signature d'une
+// pointe qui se deplace avec le rapport cyclique.
+#if SAFETY_BLANK_STAGE1 && PWM_AQ_TAIL_STAGE1
+#error "Blanking etage 1 AVEC inversion AQ : le shunt etant dans la source, il ne voit que l'amorcage, qui devient mobile sur CMPA. La fenetre ancree sur CTR=0 manquerait la pointe."
+#endif
+
+#if SAFETY_BLANK_STAGE2 && PWM_AQ_TAIL_STAGE2
+#error "Blanking etage 2 AVEC inversion AQ : meme raison qu'a l'etage 1, le shunt est dans la source."
 #endif
 
 // =====================================================================

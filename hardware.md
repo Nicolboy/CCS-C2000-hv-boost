@@ -620,3 +620,92 @@ connectée.
 > près du pic du courant d'inductance. `V1 × I1` n'a donc **pas** la
 > dimension d'une puissance de sortie d'étage. Ces voies existent pour la
 > protection et le diagnostic, jamais pour un calcul de rendement.
+
+---
+
+## Résonance du filtre d'entrée — diagnostiquée le 25/08/2026
+
+**C'est la cause réelle des défauts `overI1` qui bloquaient la montée en
+puissance, et elle n'est pas sur la carte.**
+
+### Le mécanisme
+
+Un convertisseur régulé consomme une puissance constante : quand `Vin`
+baisse, il tire *plus* de courant. Il présente donc à son entrée une
+**résistance incrémentale négative** de `−Vin²/P`, soit **−14 Ω** à 40 W
+sous 23,7 V. Cette résistance négative annule l'amortissement du LC formé
+par l'**inductance des fils d'alimentation** et la capacité d'entrée de la
+carte. Le filtre devient un oscillateur. C'est le critère de Middlebrook.
+
+### Les mesures
+
+| grandeur | valeur |
+|---|---|
+| fréquence d'oscillation initiale | **3 280 Hz** |
+| capacité d'entrée `Cin` | 180 µF |
+| impédance caractéristique `R₀ = 1/(2π·f·Cin)` | **0,27 Ω** |
+| inductance des fils, déduite `L = R₀/(2πf)` | **13 µH** (≈ 1 m de câblage) |
+| ondulation `Vin` avant traitement | 145 mV AC RMS |
+
+### Comment elle se manifestait
+
+Sur la sortie de l'ampli de shunt, en **enveloppe** modulant les pointes de
+commutation : de 0,42 V au creux à 1,5 V au sommet, période 305 µs. Les
+pointes elles-mêmes sont parasites — 0,42 V sur un shunt de 0,01 Ω
+donneraient 42 A — mais `QUALSEL` les rejette, car elles durent moins que
+les 533 ns exigés. **Le défaut survient quand l'enveloppe culmine et que
+l'excursion devient assez LONGUE**, pas assez haute.
+
+D'où deux caractéristiques trompeuses, qui ont coûté une journée :
+
+- **`Iin` ne bouge pas** au moment du défaut — 1,69 A, vérifié deux fois.
+  Le courant réel est hors de cause.
+- **ça dépend de la puissance et de `Vin`** : la conductance négative vaut
+  `−P/Vin²`. À 24 V ça tenait cinq minutes, à 20,9 V une seconde.
+
+### Le remède
+
+**Réseau d'amortissement R-C série aux bornes d'entrée**, fils courts :
+
+| | valeur retenue | optimum calculé |
+|---|---|---|
+| `C_d` | **1000 µF** électrolytique, 35 V min | ≥ 4 × `Cin` |
+| `R_d` | **0,5 Ω** (ce qui était en stock) | **0,138 Ω** |
+
+Résultat : de « défaut en 1 à 2 s » à **cinq minutes stables à 40 W**, avec
+quelques bosses résiduelles. `R_d = 0,5 Ω` est **3,6× au-dessus de
+l'optimum** : passé l'optimum, un amortisseur R-C amortit MOINS, la
+résistance déconnectant progressivement le condensateur. Descendre à
+0,22 Ω est le levier restant le plus direct, avec le raccourcissement des
+fils d'alimentation.
+
+### L'erreur à ne pas refaire
+
+**De la capacité seule DÉPLACE la résonance sans l'amortir.** Mesuré :
+le 1000 µF posé sans résistance a fait passer l'oscillation de 3 280 à
+~1 650 Hz — conforme au `1/√C` attendu — sans rien régler. C'est la
+RÉSISTANCE qui amortit ; le condensateur ne sert qu'à laisser passer
+l'alternatif en bloquant le continu, pour que `R_d` ne dissipe pas la
+puissance d'entrée. Un céramique à faible ESR est le pire choix possible.
+
+`R_d` ne voit **aucun courant continu**. À 200 kHz elle ne prend que 2,6 %
+de l'ondulation de découpage — quelques µW. À la résonance, ~130 mW, et ce
+chiffre s'effondre dès que l'amortissement fait effet. Un calibre 1 W
+suffit très largement.
+
+### À rejuger à froid — décisions prises sur ce diagnostic faux
+
+Trois modifications du 25/08 visaient une pointe de commutation qui
+n'existait pas. Elles n'ont plus de justification :
+
+1. **Inversion AQ de l'étage 2** (`PWM_AQ_TAIL_STAGE2 = 1`) — le MOSFET
+   600 V a changé de convention pour une raison qui ne tient plus.
+2. **Blanking de l'étage 2 désactivé** — conséquence de la précédente. Or
+   il FONCTIONNAIT, et c'est lui qui avait permis à l'étage 2 de monter le
+   matin même.
+3. **Phase `PWM_STAGE2_PHASE_COUNTS` à 150** — repli d'un essai à 0 qui
+   visait le mauvais problème.
+
+Le retour le plus probable est **l'étage 2 tel qu'il était le 24/08** :
+convention d'origine, blanking actif. C'est la seule configuration qui ait
+un résultat mesuré derrière elle.

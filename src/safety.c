@@ -91,13 +91,13 @@ void safety_init(void)
     EPwm1Regs.DCFCTL.bit.SRCSEL     = DC_SRC_DCAEVT1;
     EPwm1Regs.DCACTL.bit.EVT1SRCSEL = DC_EVT_FLT;
 
-    // Ancrage sur CTR = 0, qui est l'instant du BLOCAGE depuis l'inversion
-    // de l'AQ. Le decalage peut donc rester constant : DCFOFFSET n'est PAS
-    // pilote depuis l'ISR, contrairement au contournement qu'il aurait fallu
-    // avec la convention d'origine.
+    // Ancrage sur CTR = 0, qui est l'instant d'AMORCAGE depuis le retour en
+    // convention AQ d'origine (24/08). Le shunt etant dans la SOURCE du
+    // MOSFET, c'est le seul front qu'il voit : au blocage son courant
+    // s'annule. Meme raisonnement qu'a l'etage 2 -- voir calib.h.
     EPwm1Regs.DCFCTL.bit.PULSESEL   = DC_PULSESEL_ZERO;
     EPwm1Regs.DCFOFFSET             = SAFETY_BLANK_OFFSET_COUNTS;
-    EPwm1Regs.DCFWINDOW             = SAFETY_BLANK_WINDOW_COUNTS;
+    EPwm1Regs.DCFWINDOW             = SAFETY_BLANK_WINDOW_STAGE1;
     EPwm1Regs.DCFCTL.bit.BLANKE     = DC_BLANK_ENABLE;
     EPwm1Regs.DCFCTL.bit.BLANKINV   = DC_BLANK_NOTINV;
 
@@ -132,7 +132,7 @@ void safety_init(void)
     // pointe vue par le shunt, place dans la source du MOSFET. Voir calib.h.
     EPwm2Regs.DCFCTL.bit.PULSESEL   = DC_PULSESEL_ZERO;
     EPwm2Regs.DCFOFFSET             = SAFETY_BLANK_OFFSET_COUNTS;
-    EPwm2Regs.DCFWINDOW             = SAFETY_BLANK_WINDOW_COUNTS;
+    EPwm2Regs.DCFWINDOW             = SAFETY_BLANK_WINDOW_STAGE2;
     EPwm2Regs.DCFCTL.bit.BLANKE     = DC_BLANK_ENABLE;
     EPwm2Regs.DCFCTL.bit.BLANKINV   = DC_BLANK_NOTINV;
 
