@@ -667,17 +667,29 @@ D'où deux caractéristiques trompeuses, qui ont coûté une journée :
 
 **Réseau d'amortissement R-C série aux bornes d'entrée**, fils courts :
 
-| | valeur retenue | optimum calculé |
-|---|---|---|
-| `C_d` | **1000 µF** électrolytique, 35 V min | ≥ 4 × `Cin` |
-| `R_d` | **0,5 Ω** (ce qui était en stock) | **0,138 Ω** |
+**Configuration retenue, mesuree :**
 
-Résultat : de « défaut en 1 à 2 s » à **cinq minutes stables à 40 W**, avec
-quelques bosses résiduelles. `R_d = 0,5 Ω` est **3,6× au-dessus de
-l'optimum** : passé l'optimum, un amortisseur R-C amortit MOINS, la
-résistance déconnectant progressivement le condensateur. Descendre à
-0,22 Ω est le levier restant le plus direct, avec le raccourcissement des
-fils d'alimentation.
+| | valeur |
+|---|---|
+| capacite d'entree | **1000 uF** electrolytique, 35 V min |
+| resistance serie | **0,5 Ohm** |
+| les 180 uF d'origine | **DEPOSES** |
+
+Resultat : de « defaut en 1 a 2 s » a **dix minutes stables a 40 W sous
+200 V, demarrage a froid compris**.
+
+**AUCUN MODELE N'A PREDIT CETTE VALEUR, et trois tentatives ont echoue.**
+L'optimum d'Erickson pour un amortisseur R-C serie donnait 0,138 Ohm ; a
+0,22 Ohm le montage declenche systematiquement au demarrage, deux essais sur
+deux, alors qu'il tient a 0,5. La topologie reelle -- cablage entre la source
+et la carte, puis une capacite unique depuis le retrait des 180 uF -- ne
+correspond a aucun des schemas canoniques.
+
+**Ne pas re-dimensionner ce reseau par le calcul.** Si plus de marge est
+necessaire, balayer vers le HAUT (0,68 puis 1 Ohm) et garder ce qui mesure le
+mieux. Un fait a verser au dossier : a 0,22 Ohm l'ondulation de Vin est plus
+FAIBLE qu'a 0,5 -- 159 contre 241 mV AC RMS -- et pourtant ca declenche. Ce
+n'est donc pas l'ondulation de Vin qui gouverne la tenue.
 
 ### L'erreur à ne pas refaire
 
