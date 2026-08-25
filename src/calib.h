@@ -1046,9 +1046,17 @@ ERREUR_seuil_etage2_au_dela_de_la_reference_DAC_baisser_SAFETY_ISHUNT_THRESHOLD_
 // ancree sur CTR = 0 couvrirait le BLOCAGE -- instant ou le courant du shunt
 // s'annule, donc ou il n'y a rien a masquer.
 //
-// SI ON Y REVIENT : asservir DCFOFFSET a CMPA depuis l'ISR pour que la
-// fenetre suive l'amorcage, seul front que le shunt voit conduire.
-#define SAFETY_BLANK_STAGE1          0
+// REACTIVE LE 25/08/2026, cette fois sur une capture. Voir le garde-fou en
+// bas de fichier : la pointe est au BLOCAGE, mesuree a 0,45 V a l'entree de
+// l'ampli contre un seuil equivalent a 50 mV -- neuf fois la pleine echelle.
+// Seul QUALSEL (533 ns) la rejette aujourd'hui, et il suffit qu'elle
+// s'allonge un peu, ce qu'elle fait quand la puissance monte, pour qu'elle
+// franchisse. C'est la cause des overI1 residuels a 200-210 V une fois la
+// resonance du filtre d'entree traitee.
+//
+// La convention tail des deux etages ancre ce front sur CTR = 0, donc la
+// fenetre l'atteint. Rien d'autre a changer.
+#define SAFETY_BLANK_STAGE1          1
 
 // ---- BLANKING ETAGE 2, ACTIVE LE 24/08/2026 -------------------------
 // RELEVE AU SCOPE sur la sortie d'ampli I2, 5 us/div, a 450 V sur 25 kOhms :
@@ -1060,27 +1068,20 @@ ERREUR_seuil_etage2_au_dela_de_la_reference_DAC_baisser_SAFETY_ISHUNT_THRESHOLD_
 // laquelle une fenetre de 500 ns ne pouvait rien, et le blanking avait ete
 // desactive a juste titre. Ici c'est une vraie pointe de commutation.
 //
-// POURQUOI CA MARCHE SANS INVERSER L'AQ DE L'ETAGE 2. Le shunt est dans la
-// SOURCE du MOSFET : il ne voit une pointe de courant qu'a l'AMORCAGE,
-// quand Coss se decharge a travers le canal. Au blocage le courant du shunt
-// s'annule. Or en convention d'origine -- celle que garde l'etage 2 --
-// l'amorcage tombe sur CTR = 0, qui est FIXE. PULSESEL sait l'ancrer la.
+// [SUPPRIME LE 25/08/2026] Un paragraphe expliquait ici que le shunt, place
+// dans la SOURCE, ne verrait de pointe qu'a l'AMORCAGE, le courant s'annulant
+// au blocage. LA MESURE LE CONTREDIT -- capture grille/shunt du 25/08, voir
+// le garde-fou en bas de fichier : la pointe positive est au BLOCAGE. Ce
+// raisonnement a fait ecarter trois fois la bonne solution ; il ne doit pas
+// etre remis en circulation.
 //
-// C'est l'inverse de l'etage 1, ou l'inversion de l'AQ etait necessaire
-// parce que c'est le BLOCAGE qu'on voulait couvrir.
+// Pourquoi cette fenetre fonctionnait quand meme le 24/08, en convention
+// d'origine ou CTR = 0 est l'amorcage, RESTE INEXPLIQUE.
 //
-// SI LE DEFAUT PERSISTE, c'est que la pointe tombe en fait sur CMPA, donc
-// au blocage, et aucune fenetre ancree sur CTR = 0 ne l'atteindra. Il
-// faudrait alors inverser l'AQ de l'etage 2 -- chantier a part.
-// DESACTIVE LE 24/08/2026, ET C'EST UNE REGRESSION ASSUMEE. Cette fenetre
-// fonctionnait -- c'est elle qui avait permis a l'etage 2 de monter le matin
-// meme. Elle est levee parce que le passage de l'etage 2 en convention tail
-// la rend INOPERANTE : ancree sur CTR = 0, elle couvre desormais le blocage,
-// ou le courant du shunt est nul, et manque l'amorcage devenu mobile.
-//
-// La garder aveuglerait la protection a un instant ou il ne se passe rien.
-// Mieux vaut l'eteindre franchement que la laisser donner le change.
-#define SAFETY_BLANK_STAGE2          0
+// REACTIVE LE 25/08/2026 avec celle de l'etage 1, et pour la meme raison :
+// en convention tail, CTR = 0 est le BLOCAGE, c'est-a-dire le front que la
+// mesure du 25/08 designe comme portant la pointe.
+#define SAFETY_BLANK_STAGE2          1
 #define SAFETY_BLANK_OFFSET_COUNTS   0U
 
 // ---- FENETRE DE BLANKING, PAR ETAGE (24/08/2026) ---------------------
@@ -1105,8 +1106,15 @@ ERREUR_seuil_etage2_au_dela_de_la_reference_DAC_baisser_SAFETY_ISHUNT_THRESHOLD_
 //
 // A RETRECIR des qu'une capture sur la sortie d'ampli I1 donnera la duree
 // reelle de l'evenement. 75 counts est un majorant deduit, pas une mesure.
+// 25/08 : l'etage 2 passe de 30 a 75 counts comme l'etage 1. Ses 30 counts
+// avaient ete dimensionnes en convention D'ORIGINE, sur une pointe reputee
+// etre a l'amorcage ; la convention a change et la mesure de la journee
+// designe le blocage. L'ancienne valeur n'a donc plus de fondement, et la
+// seule duree qu'on ait mesuree est celle de la capture grille/shunt du
+// 25/08 : pointe et queue de decroissance sur ~1 us. 75 counts = 1,25 us la
+// couvrent.
 #define SAFETY_BLANK_WINDOW_STAGE1  75U
-#define SAFETY_BLANK_WINDOW_STAGE2  30U
+#define SAFETY_BLANK_WINDOW_STAGE2  75U
 
 #ifdef SAFETY_BLANK_WINDOW_COUNTS
 #error "SAFETY_BLANK_WINDOW_COUNTS est scinde par etage : utiliser SAFETY_BLANK_WINDOW_STAGE1 / _STAGE2."
@@ -2500,16 +2508,17 @@ ERREUR_seuil_etage2_au_dela_de_la_reference_DAC_baisser_SAFETY_ISHUNT_THRESHOLD_
 // pwm_apply_adc_trigger() calcule cette mi-conduction selon la convention de
 // l'etage -- (CMPA + TBPRD + 1)/2 en tail -- il n'y a rien a re-regler.
 //
-// CE QUE CA COUTE. L'amorcage devient mobile sur les DEUX etages. Or c'est
-// lui, et non le blocage, que le shunt voit conduire une pointe : place dans
-// la SOURCE du MOSFET, il recoit la decharge de Coss a travers le canal,
-// tandis qu'au blocage son courant s'annule. Une fenetre de blanking ancree
-// sur CTR = 0 ne peut donc plus la couvrir.
+// CE QUE CA APPORTE, confirme par la mesure du 25/08. La pointe qui fait
+// declencher le comparateur est au BLOCAGE -- capture grille/shunt, pointe
+// POSITIVE de 0,45 V au front descendant de grille, contre un creux NEGATIF
+// de -0,25 V a l'amorcage. La convention tail ancre donc sur CTR = 0
+// exactement le front qu'il faut masquer, et le blanking devient possible
+// sur les deux etages.
 //
-// C'est assume : le blanking est mis de cote (voir SAFETY_BLANK_STAGE1/2),
-// la pointe venant de l'inductance propre du shunt plutot que d'un instant
-// masquable. Si on y revient, le contournement est connu -- asservir
-// DCFOFFSET a CMPA depuis l'ISR pour que la fenetre suive l'amorcage.
+// C'etait la strategie demandee des le depart par le concepteur : grouper
+// les transitions haut-bas des grilles dans une fenetre courte et connue,
+// puis masquer cette fenetre. Elle a ete ecartee trois fois au nom d'un
+// raisonnement sur la position du shunt que la mesure a infirme.
 #define PWM_AQ_TAIL_STAGE1   1
 #define PWM_AQ_TAIL_STAGE2   1
 
@@ -2545,29 +2554,40 @@ ERREUR_seuil_etage2_au_dela_de_la_reference_DAC_baisser_SAFETY_ISHUNT_THRESHOLD_
 // Elle doit donc couvrir un front FIXE, et le front a couvrir est celui que
 // le SHUNT voit.
 //
-// INVERSION DU 24/08/2026, et il faut lire la raison. Ce garde-fou exigeait
-// l'inverse : blanking INTERDIT sans inversion de l'AQ, au motif que le
-// BLOCAGE tombait sur CMPA. La premisse etait fausse.
+// ---- TRANCHE PAR LA MESURE LE 25/08/2026 -----------------------------
+// Ce garde-fou a porte SUCCESSIVEMENT les deux sens contraires dans la
+// journee, chaque fois sur un raisonnement et jamais sur une capture. Il est
+// desormais fonde sur une mesure, et c'est la seule raison de le croire.
 //
-// LES DEUX SHUNTS SONT DANS LA SOURCE DES MOSFET. Un shunt ainsi place ne
-// voit une pointe de courant qu'a l'AMORCAGE, quand Coss se decharge a
-// travers le canal ; au blocage, le courant du shunt s'annule. Le comparateur
-// ne voit donc JAMAIS le front de blocage, si rayonnant soit-il.
+// LA CAPTURE. C1 sur la GRILLE du MOSFET de l'etage 1 (0 a 10 V, MOSFET N
+// classique, grille haute = conducteur), C2 a l'entree de l'ampli de shunt,
+// 2 us/div :
 //
-// C'est l'AMORCAGE qu'il faut ancrer, et il tombe sur CTR = 0 en convention
-// D'ORIGINE. L'inversion de l'AQ le rendrait mobile -- exactement ce que ce
-// garde-fou pretendait empecher, mais sur l'autre front.
+//   grille qui DESCEND (blocage) -> pointe POSITIVE de 0,45 V
+//   grille qui MONTE  (amorcage) -> creux NEGATIF de -0,25 V
 //
-// Confirmation experimentale a l'appui : l'etage 2, jamais inverse, blanke
-// correctement depuis le 24/08 ; l'etage 1, inverse le 23/08, presentait un
-// comportement irreproductible d'un essai a l'autre -- la signature d'une
-// pointe qui se deplace avec le rapport cyclique.
-#if SAFETY_BLANK_STAGE1 && PWM_AQ_TAIL_STAGE1
-#error "Blanking etage 1 AVEC inversion AQ : le shunt etant dans la source, il ne voit que l'amorcage, qui devient mobile sur CMPA. La fenetre ancree sur CTR=0 manquerait la pointe."
+// Le comparateur ne declenchant que sur depassement positif, LE FRONT QUI
+// COMPTE EST LE BLOCAGE.
+//
+// CE QUI EST DONC FAUX, et ecrit ailleurs dans ce fichier : l'affirmation
+// selon laquelle un shunt place dans la SOURCE ne verrait de pointe qu'a
+// l'amorcage, le courant s'annulant au blocage. Le raisonnement est
+// seduisant, la mesure le contredit. Ne pas le remettre en circulation.
+//
+// CONSEQUENCE : c'est le BLOCAGE qu'il faut ancrer, donc la convention TAIL
+// est REQUISE pour que le blanking serve a quelque chose. D'ou le sens de ce
+// garde-fou.
+//
+// RESTE INEXPLIQUE : le blanking de l'etage 2 fonctionnait le 24/08 en
+// convention d'origine, ou CTR = 0 est l'amorcage. Si la pointe est au
+// blocage, on ne sait pas pourquoi ca marchait. A eclaircir, sans que ca
+// change ce qu'il faut faire aujourd'hui.
+#if SAFETY_BLANK_STAGE1 && !PWM_AQ_TAIL_STAGE1
+#error "Blanking etage 1 sans convention tail : la pointe est au BLOCAGE (mesure du 25/08), qui tombe sur CMPA en convention d'origine, donc a un instant mobile. La fenetre ancree sur CTR=0 la manquerait."
 #endif
 
-#if SAFETY_BLANK_STAGE2 && PWM_AQ_TAIL_STAGE2
-#error "Blanking etage 2 AVEC inversion AQ : meme raison qu'a l'etage 1, le shunt est dans la source."
+#if SAFETY_BLANK_STAGE2 && !PWM_AQ_TAIL_STAGE2
+#error "Blanking etage 2 sans convention tail : meme raison qu'a l'etage 1."
 #endif
 
 // =====================================================================

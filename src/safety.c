@@ -91,10 +91,12 @@ void safety_init(void)
     EPwm1Regs.DCFCTL.bit.SRCSEL     = DC_SRC_DCAEVT1;
     EPwm1Regs.DCACTL.bit.EVT1SRCSEL = DC_EVT_FLT;
 
-    // Ancrage sur CTR = 0, qui est l'instant d'AMORCAGE depuis le retour en
-    // convention AQ d'origine (24/08). Le shunt etant dans la SOURCE du
-    // MOSFET, c'est le seul front qu'il voit : au blocage son courant
-    // s'annule. Meme raisonnement qu'a l'etage 2 -- voir calib.h.
+    // Ancrage sur CTR = 0, qui est l'instant de BLOCAGE en convention tail.
+    // C'est le front que la mesure du 25/08 designe comme portant la pointe :
+    // capture grille/shunt, pointe POSITIVE de 0,45 V au front DESCENDANT de
+    // grille, contre un creux NEGATIF a l'amorcage. Le comparateur ne
+    // declenchant que sur depassement positif, c'est bien le blocage qu'il
+    // faut masquer. Voir calib.h.
     EPwm1Regs.DCFCTL.bit.PULSESEL   = DC_PULSESEL_ZERO;
     EPwm1Regs.DCFOFFSET             = SAFETY_BLANK_OFFSET_COUNTS;
     EPwm1Regs.DCFWINDOW             = SAFETY_BLANK_WINDOW_STAGE1;
@@ -127,9 +129,8 @@ void safety_init(void)
     EPwm2Regs.DCFCTL.bit.SRCSEL     = DC_SRC_DCAEVT1;
     EPwm2Regs.DCACTL.bit.EVT1SRCSEL = DC_EVT_FLT;
 
-    // Ancrage sur CTR = 0. Sur CET etage, reste en convention AQ d'origine,
-    // CTR = 0 est l'instant d'AMORCAGE -- et c'est l'amorcage qui produit la
-    // pointe vue par le shunt, place dans la source du MOSFET. Voir calib.h.
+    // Ancrage sur CTR = 0, instant de BLOCAGE en convention tail, comme a
+    // l'etage 1 et pour la meme raison mesuree. Voir calib.h.
     EPwm2Regs.DCFCTL.bit.PULSESEL   = DC_PULSESEL_ZERO;
     EPwm2Regs.DCFOFFSET             = SAFETY_BLANK_OFFSET_COUNTS;
     EPwm2Regs.DCFWINDOW             = SAFETY_BLANK_WINDOW_STAGE2;
