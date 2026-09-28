@@ -1113,7 +1113,37 @@ ERREUR_seuil_etage2_au_dela_de_la_reference_DAC_baisser_SAFETY_ISHUNT_THRESHOLD_
 // seule duree qu'on ait mesuree est celle de la capture grille/shunt du
 // 25/08 : pointe et queue de decroissance sur ~1 us. 75 counts = 1,25 us la
 // couvrent.
-#define SAFETY_BLANK_WINDOW_STAGE1  75U
+// ---- ETAGE 1 : 75 -> 110 COUNTS, ON MASQUE TOUT LE TEMPS DE BLOCAGE ---
+// 75 counts couvraient le front de BLOCAGE mais pas celui d'AMORCAGE, et
+// c'est ce dernier qui declenchait ensuite. Mesure du 25/08 : a 200 V,
+// PosDuty = 69,5 % sur la grille, donc en convention tail CMPA = 30,5 % x 300
+// = 91 counts. L'amorcage tombait 16 counts APRES la fin de la fenetre --
+// 270 ns dehors. D'ou un seuil net et reproductible : 200 V passe, 210 V non,
+// a la montee comme au demarrage.
+//
+// LE PRINCIPE. On ne cherche plus a masquer deux fronts separement, mais
+// TOUT L'INTERVALLE DE BLOCAGE. En convention tail le MOSFET est bloque de
+// CTR = 0 a CMPA, et pendant ce temps LE COURANT DU SHUNT EST NUL PAR
+// CONSTRUCTION : il n'y a rien de legitime a surveiller. La protection n'a
+// besoin de voir que la conduction, seul moment ou le courant est reel. Une
+// fenetre allant un peu au-dela de CMPA couvre donc les deux fronts ET tout
+// ce qui les separe, a tous les points de fonctionnement.
+//
+// DIMENSIONNEMENT. CMPA = (1 - D) x 300, maximal quand D est minimal. A
+// V1 = 81 V et Vin = 24 V, D = 0,70 donc CMPA = 90. 110 counts laissent 20
+// counts de marge et couvrent la plage utile.
+//
+// LE PRIX : 1,83 us sur 5, l'etage 1 est aveugle 37 % du temps -- et cet
+// aveuglement s'empile sur les 533 ns de QUALSEL. C'est le moment ou le
+// MOSFET est cense etre ouvert, donc ou un court-circuit se manifesterait
+// plutot par l'autre etage, mais ca reste un arbitrage de securite assume.
+//
+// ETAGE 2 : laisse a 75, non traite. Le meme raisonnement y demanderait
+// ~280 counts (CMPA = 243 a 200 V sur une periode de 600), soit 47 %
+// d'aveuglement -- et il faudra d'abord VERIFIER LA LARGEUR REELLE du champ
+// DCFWINDOW dans le TRM : l'en-tete le declare en uint16_t plein, mais le
+// registre materiel est plus etroit sur certains membres de la famille.
+#define SAFETY_BLANK_WINDOW_STAGE1  110U
 #define SAFETY_BLANK_WINDOW_STAGE2  75U
 
 #ifdef SAFETY_BLANK_WINDOW_COUNTS
