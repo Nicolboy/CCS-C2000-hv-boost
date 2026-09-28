@@ -13,3 +13,7 @@ CLAUDE.md
 # Outillage agent (local, non partage)
 .claude/
 .codex/
+
+# Documents constructeur : sous copyright, jamais redistribues.
+# Ils se telechargent chez le fabricant, cf. docs/references.md
+*.pdf
