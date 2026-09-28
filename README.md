@@ -88,6 +88,21 @@ Le reste — `src/`, la documentation, les fichiers de projet — est à moi.
 
 ---
 
+## Licence
+
+[CERN-OHL-S v2](LICENSE) — la même que la carte pour laquelle ce firmware est
+écrit, pour que l'ensemble reste sous un seul régime.
+
+Tu peux étudier, modifier et distribuer. En contrepartie, si tu distribues un
+produit fondé dessus, tu dois publier les sources correspondantes sous la même
+licence.
+
+Exception : les fichiers `F2802x_*.c` et `F2802x_*.h` restent sous licence
+**Texas Instruments**, de type BSD à trois clauses, avec leurs en-têtes de
+copyright d'origine.
+
+---
+
 ## Ce que ce dépôt ne contient pas
 
 Aucun document constructeur — ni la datasheet du F28027, ni le manuel technique
