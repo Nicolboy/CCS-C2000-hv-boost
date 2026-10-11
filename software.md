@@ -483,7 +483,7 @@ $C,HT=1,V1SET=35.0,VOSET=400.0,RUN=1*XX
 |---|---|---|
 | `HT` | 0/1 | optionnel |
 | `RUN` | 0/1 | optionnel, **0 par défaut au boot** |
-| `V1SET` | **15 à 50 V** | optionnel |
+| `V1SET` | **15 à 77 V** | optionnel |
 | `VOSET` | **200 à 500 V**, ou **0 = étage 2 désactivé** | optionnel |
 | `PWM1`, `PWM2` | 0/1 | acceptés, **sans effet** (historiques) |
 
