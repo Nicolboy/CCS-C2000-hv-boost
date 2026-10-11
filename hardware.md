@@ -1,7 +1,7 @@
 # hardware.md — Alimentation HT « dual boost » TMS320F28027
 
 Synthèse matérielle reconstituée à partir des sources du projet
-(`docs/TMS-pin-v2.txt`, `docs/PROMPT-claude-code-TMS320.md`,
+(`docs/TMS-pin-v2.txt`, `docs/journal-20260801-amorcage-firmware.md`,
 `docs/mesure-cartepuissance.md`, `src/calib.h`, `src/bsp_gpio.c`).
 En cas de divergence, ces fichiers font foi — celui-ci est un résumé.
 
@@ -368,7 +368,7 @@ Intégrés à la carte V0.2, plus rien à monter côté matériel :
   sous-dimensionné pour une sortie qui atteint 500 V et coupe à 520 V.
 - **RC 100 Ω / 100 pF sur l'entrée du driver de l'étage 2** — intégré. C'est
   le correctif qui a résolu l'oscillation de grille de l'étage 1 ; sans lui un
-  MOSFET a été détruit (voir `docs/PROMPT-oscillation-grille.md`).
+  MOSFET a été détruit (voir `docs/journal-20260818-oscillation-grille-mosfet.md`).
 - **RC 1 kΩ / 100 pF à l'entrée de l'ampli de shunt I2** — intégré.
 - **Retour de masse en étoile pour les ponts diviseurs** — intégré.
 
